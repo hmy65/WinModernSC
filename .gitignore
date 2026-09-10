@@ -216,3 +216,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# 源字体，自己下载
+source/
+
+# 生成的字体
+CJKMod/
+SegoeUIMod/
+
+# 安装时写的注册表备份，只对本机有意义
+winmodernsc-backup.json
