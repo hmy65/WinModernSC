@@ -8,11 +8,12 @@ WinModernSC replaces the Windows UI font across the whole system — the shell, 
 Win32 dialogs, UWP/WinUI apps, browsers and Office documents — using one source font
 family of your choice.
 
-It works in two stages. Two Python scripts read the fonts in `source\` and generate two
-sets of font files: a 12-file `Segoe UI` family (Latin only) and 8 files that stand in for
-the Windows Chinese families (Microsoft YaHei / SimSun / SimHei / DengXian). A PowerShell
-script then wires those files into four registry mechanisms and backs up every value it
-touches first.
+It works in two stages. Three Python scripts read the fonts in `source\` and generate three
+sets of font files: a 12-file static `Segoe UI` family (Latin only), the single variable
+font `Segoe UI Variable` that the Windows 11 shell actually uses, and 8 files that stand in
+for the Windows Chinese families (Microsoft YaHei / SimSun / SimHei / DengXian) — 21 files
+in all. A PowerShell script then wires those files into four registry mechanisms and backs
+up every value it touches first.
 
 **Recommended source: [SarasaGothicSC-TTF](https://github.com/be5invis/Sarasa-Gothic/releases)**
 — the TTF release package, not the `-Unhinted` one. This is the combination this project
@@ -21,9 +22,11 @@ TrueType hinting, so stems still separate cleanly at the small pixel sizes Windo
 runs at, and it carries Latin and Han in a single family so the two halves match.
 
 Any Simplified Chinese font works as long as the files in `source\` follow the
-`<Family>-<Style>.ttf` naming rule and cover the required weights. Only upright weights are
-required — most Simplified Chinese families ship no italics at all, so when one is missing
-the generator slants the matching upright itself, at a real cost described below.
+`<Family>-<Style>.ttf` naming rule and form one of the
+[three legal layouts](#1-put-the-source-fonts-in-source): a set of static weights, a single
+variable font, or both together. Only upright weights are required — most Simplified Chinese
+families ship no italics at all, so when one is missing the generator slants the matching
+upright itself.
 
 ## The four mechanisms
 
@@ -33,10 +36,10 @@ mechanism under `src\`.
 
 | # | What it does | Defined in |
 | --- | --- | --- |
-| **1** | Repoints the `Fonts` registry key at the generated files — 12 for the `Segoe UI` family (Latin) and 8 standing in for the Windows Chinese families (Microsoft YaHei / SimSun / SimHei / DengXian). GDI and DirectWrite both read the family name out of the font file itself, so this is the layer with the widest reach: shell, UWP/WinUI, browsers, Office. | [`src/main_fonts.ps1`](src/main_fonts.ps1) |
-| **2** | Writes `FontSubstitutes` entries pointing `Tahoma`, `MS Shell Dlg`, `MS Sans Serif` and friends at `Segoe UI`. Only GDI reads this table; it is there to catch legacy Win32 programs still asking for family names that no longer have a good font behind them. | [`src/main_font_substitutes.ps1`](src/main_font_substitutes.ps1) |
-| **3** | Writes the six `WindowMetrics` LOGFONTs (caption, small caption, menu, dialog, status bar, icon label) plus caption height and the Windows 11 border, for every user profile on the machine. Classic comctl32 controls never consult `Fonts` or `FontSubstitutes` — the system pushes the font *and its point size* to them through `SystemParametersInfo` — so this is the only layer that can change the size. | [`src/main_window_metrics.ps1`](src/main_window_metrics.ps1) |
-| **4** | Prepends two lines to `FontLink\SystemLink` for the five `Segoe UI` GDI families, so their Han fallback resolves through the files mechanism 1 installed instead of the stock font in `%windir%\Fonts`. Each family gets the matching weight (`Segoe UI Light` links the Light cut, `Segoe UI Black` the Bold one); mismatch it and you get light Latin next to regular-weight Han. The inserted entry copies the `,128,96` suffix from the stock entry it shadows — that suffix is what switches on GDI's size matching between the base font and the linked one (measured on Win11 26200: with it, `Segoe UI` renders linked `Microsoft YaHei UI` at 1.05×; without it, a flat 1.00×), so dropping it would silently turn the matching off. Windows pairs every scaled entry with an unscaled duplicate of itself, so we do the same — hence two lines. The rest of each existing chain is kept as-is — its order and its `,128,96` scaling parameters are deliberate, and it carries the Japanese, Korean, Traditional Chinese and Segoe UI Symbol fallbacks. | [`src/main_font_link.ps1`](src/main_font_link.ps1) |
+| **1** | Repoints the `Fonts` registry key at the 21 generated files (12 static `Segoe UI`, 1 `Segoe UI Variable`, 8 Chinese families); GDI and DirectWrite both read the family name out of the font file itself, so the shell, UWP/WinUI, browsers and Office all follow. | [`src/main_fonts.ps1`](src/main_fonts.ps1) |
+| **2** | Writes `FontSubstitutes` entries pointing the old family names `Tahoma`, `MS Shell Dlg` and `MS Sans Serif` at `Segoe UI`, to catch legacy Win32 programs still asking for them. | [`src/main_font_substitutes.ps1`](src/main_font_substitutes.ps1) |
+| **3** | Writes the six `WindowMetrics` LOGFONTs (caption, small caption, menu, dialog, status bar, icon label) plus caption height and border width — this is the only layer that can change the point size. | [`src/main_window_metrics.ps1`](src/main_window_metrics.ps1) |
+| **4** | Prepends two lines to `FontLink\SystemLink` for every `Segoe UI` family, so GDI's Han fallback resolves through the files mechanism 1 installed instead of the stock font in `%windir%\Fonts`. Each family gets the matching weight, and the rest of the existing chain is kept as-is. | [`src/main_font_link.ps1`](src/main_font_link.ps1) |
 
 Undoing all four is handled by [`src/main_revert.ps1`](src/main_revert.ps1), driven from the
 backup JSON that each mechanism writes before it changes anything.
@@ -62,74 +65,81 @@ without it — each writes what it writes regardless — but the *result* change
 
 Each item below names the mechanism and the file that implements it.
 
-**Covers both rendering paths, not just one.** Mechanism 1
-([`src/main_fonts.ps1`](src/main_fonts.ps1)) repoints the `Fonts` registry key at generated
-files whose `name` table carries the target family name — GDI and DirectWrite both read the
-family name out of the font file, so both follow. Mechanism 2
-([`src/main_font_substitutes.ps1`](src/main_font_substitutes.ps1)) adds `FontSubstitutes`
-entries, which only GDI reads, to catch legacy Win32 programs still asking for `Tahoma` or
-`MS Shell Dlg`. Mechanism 4 ([`src/main_font_link.ps1`](src/main_font_link.ps1)) extends
-`FontLink\SystemLink` so GDI's Han fallback resolves through the same files instead of
-going straight to `%windir%\Fonts` and picking up the stock font. Editing `FontSubstitutes`
-by hand only covers the GDI half of this.
+**1. Covers both rendering paths.** The files mechanism 1
+([`src/main_fonts.ps1`](src/main_fonts.ps1)) points at carry the target family name
+themselves, and GDI and DirectWrite both read the family name out of the font file, so both
+follow. Mechanism 2 ([`src/main_font_substitutes.ps1`](src/main_font_substitutes.ps1)) then
+catches legacy Win32 programs that only read `FontSubstitutes`, and mechanism 4
+([`src/main_font_link.ps1`](src/main_font_link.ps1)) sends GDI's Han fallback through the
+same files. Editing `FontSubstitutes` by hand only covers the GDI half of this.
 
-**Han text that a web page or document asks for by name gets replaced too.**
+**2. Han text a web page or document asks for by name gets replaced too.**
 [`src/make_cjk.py`](src/make_cjk.py) writes both the English and the localized family name
-(`nameID 1`, langID `0x804`) into the generated files — `Microsoft YaHei` / 微软雅黑,
-`SimSun` / 宋体, `SimHei` / 黑体, `DengXian` / 等线 — and mechanism 1 points the matching
-`Fonts` entries at them. A page with `font-family: 微软雅黑` or a Word document whose body
-font is 宋体 therefore resolves to the new font. `FontSubstitutes` cannot do this, because
-DirectWrite ignores that table entirely.
+(`Microsoft YaHei` / 微软雅黑, `SimSun` / 宋体, `SimHei` / 黑体, `DengXian` / 等线) into the
+generated files, and mechanism 1 points the matching `Fonts` entries at them. A page with
+`font-family: 微软雅黑` or a Word document whose body font is 宋体 therefore resolves to the
+new font. `FontSubstitutes` cannot do this, because DirectWrite ignores that table entirely.
 
-**Latin and Han come from one source font.**
+**3. Latin and Han come from one source font.**
 [`src/make_segoe_ui.py`](src/make_segoe_ui.py) subsets the generated `Segoe UI` family down
-to the coverage of the real Segoe UI, dropping Han — which is what stock Windows does, the
-real Segoe UI has no Han either — and mechanism 4 makes sure the fallback lands on the CJK
-files built from the same source by `make_cjk.py`.
+to the coverage of the real Segoe UI, dropping Han — the real Segoe UI has no Han either.
+What drops out is picked up by mechanism 4, which routes it to the CJK files `make_cjk.py`
+built from the same source.
 
-**Changes size and window geometry, not just family names.** Mechanism 3
-([`src/main_window_metrics.ps1`](src/main_window_metrics.ps1)) writes the six `WindowMetrics`
-LOGFONTs plus caption height and the Windows 11 padded border. It does this for every user
-profile on the machine, plus `HKU\.DEFAULT` and the new-user template
-(`C:\Users\Default\NTUSER.DAT`, temporarily `reg load`ed), so new accounts and the pre-logon
-UI get it too. Each hive's `AppliedDPI` is recorded in the backup, and `lfHeight` is
-rescaled on restore if display scaling changed in the meantime. noMeiryoUI covers this layer
-only — it does not reach the layers that browsers, UWP apps or Office read.
+**4. Whatever the source lacks gets filled in — composed rather than imported where
+possible.** [`src/patch_glyphs.py`](src/patch_glyphs.py) patches in the accented letters and
+symbols that the Windows font being replaced has and the source does not. Characters that
+decompose (`À = A + ̀ `) become composite glyphs whose base references the source's own
+letter, so style and advance width stay the source's; only what does not decompose is
+imported whole. See "[Patching in missing glyphs](#patching-in-missing-glyphs)".
 
-**Full backup, one-command restore, and a dry run.** Every value that is about to be written
-is read and saved to `winmodernsc-backup.json` before anything is modified. Values that did
-not exist beforehand are recorded as null and deleted on restore, and registry keys the
-install created are removed if they end up empty, so `-revert` does not leave residue.
-`-DryRun` prints the complete plan for all four mechanisms and writes nothing at all — not
-even the backup file.
+**5. The Windows 11 shell layer gets replaced too.** Win11's Settings, Start menu and every
+WinUI 3 app do not use those 12 static files — they use the variable font `Segoe UI
+Variable`, which is its own entry in the `Fonts` key. [`src/make_vf.py`](src/make_vf.py)
+builds that one file, copying `name` / `fvar` / `STAT` field by field from the real
+`SegUIVar.ttf` on the system, so if Microsoft reshuffles them in a future build we follow
+along.
 
-**No process injection, no system files replaced.** Font files are copied to `C:\Fonts` and
-the registry is pointed at them; nothing under `%windir%\Fonts` is modified or deleted.
-Nothing runs after installation. MacType, by comparison, injects into processes to change
+**6. Changes size and window geometry, not just family names.** Mechanism 3
+([`src/main_window_metrics.ps1`](src/main_window_metrics.ps1)) writes the six LOGFONTs plus
+caption height and border width, for every user profile on the machine as well as
+`HKU\.DEFAULT` and the new-user template, so new accounts and the pre-logon UI get it too.
+Each hive's `AppliedDPI` goes into the backup, and `lfHeight` is rescaled on restore if
+display scaling changed in the meantime. noMeiryoUI covers this layer only — not the ones
+browsers, UWP apps and Office read.
+
+**7. Full backup, one-command restore, and a dry run.** Every value about to be written is
+saved to `winmodernsc-backup.json` first; values that did not exist beforehand are recorded
+as null and deleted on restore. Registry keys the install created are removed if they end up
+empty, so `-revert` leaves no residue. `-DryRun` prints the complete plan for all four
+mechanisms and writes nothing at all.
+
+**8. No process injection, no system files replaced.** Font files are copied to `C:\Fonts`
+and the registry is pointed at them; nothing under `%windir%\Fonts` is modified or deleted.
+Nothing runs after installation — MacType, by comparison, injects into processes to change
 rasterization at run time.
 
-**Not tied to one source font.** [`src/util.py`](src/util.py) scans `source\` for
-`<Family>-<Style>.ttf` files, requires only Regular / Light plus either Bold or Black, and
-uses any extra weights it finds. Every output picks the same-named style first and falls back
-to the nearest available one; those fallback chains are a literal table at the top of
-`make_segoe_ui.py` and `make_cjk.py`, and the resolved mapping is printed before each build
-starts. Italics are not required: an output whose whole italic chain comes up empty is built
-by shearing the matching upright instead, which keeps the door open to the many Simplified
-Chinese families that have no italics — see the trade-off below before relying on it.
+**9. Not tied to one source font.** [`src/util.py`](src/util.py) scans `source\` and
+classifies it as `STATIC`, `VF` or `BOTH`; all three generators branch on that. The static
+path requires only Regular / Light plus either Bold or Black, and uses any extra weights it
+finds; on the variable path the weight each output is cut at is read straight off the Windows
+font it impersonates. Italics are not required — a missing one is built by shearing the
+matching upright.
 
 ## Requirements and setup
 
 ### Requirements
 
-- **Windows 10 or 11** with the Simplified Chinese fonts and the static Segoe UI files
-  present in `%windir%\Fonts`: `msyh.ttc`, `msyhbd.ttc`, `msyhl.ttc`, `simsun.ttc`,
-  `simhei.ttf`, `Deng.ttf`, `Dengb.ttf`, `Dengl.ttf`, and `segoeui.ttf` … `seguibli.ttf`.
-  The generators copy identity fields (family name, style, weight class, PANOSE) from these
-  and stop with a list of what is missing if any are absent.
+- **Windows 10 or 11** with the Simplified Chinese fonts, the static Segoe UI files and the
+  variable `SegUIVar.ttf` present in `%windir%\Fonts`: `msyh.ttc`, `msyhbd.ttc`, `msyhl.ttc`,
+  `simsun.ttc`, `simhei.ttf`, `Deng.ttf`, `Dengb.ttf`, `Dengl.ttf`,
+  `segoeui.ttf` … `seguibli.ttf`, and `SegUIVar.ttf`.
 - **Python 3.8+** with fontTools: `pip install fonttools`
 - **PowerShell as Administrator** — Windows PowerShell 5.1 or PowerShell 7 both work.
   `-DryRun` is the only mode that runs without elevation.
 - **About 205 MB free on `C:`** for the generated fonts (the CJK files are the bulk of it).
+  With a variable source, `SegoeUI-Variable.ttf` carries the whole source font, so add tens
+  of MB on top.
 
 ### 1. Put the source fonts in `source\`
 
@@ -144,41 +154,59 @@ Naming rules for that directory:
 - Every file must be named `<Family>-<Style>.ttf`, e.g. `SarasaGothicSC-Regular.ttf`,
   `SarasaGothicSC-BoldItalic.ttf`.
 - `<Family>` must be identical for every file in the directory — one family per directory.
-- Required styles: `Regular`, `Light`, plus either `Bold` or `Black`. Missing any of these is
-  a hard error that names the exact files it could not find.
+  Mixing families is rejected outright rather than guessed at.
+- `VF` is a reserved style name meaning "variable font": `<Family>-VF.ttf`, at most one per
+  directory. Name and content have to agree — a file called `-VF.ttf` with no `fvar` table,
+  or a file *with* an `fvar` table using a static weight name, is a hard error. (The second
+  one especially: it would carry `fvar` / `STAT` into the `Segoe UI` family, and DirectWrite
+  would then derive the family names from STAT and scramble every weight in it.)
+
+**Three legal layouts; anything else is rejected.** The validator prints the source kind it
+decided on, and all three generators branch on it:
+
+| Kind | What is in `source\` | How the three scripts run |
+| --- | --- | --- |
+| `STATIC` | A set of static weights: at least `Regular` + `Light`, plus `Bold` or `Black` | The 12 `Segoe UI` files and the 8 Chinese ones each pick a static weight; `Segoe UI Variable` is synthesized from the static weights |
+| `VF` | A single `<Family>-VF.ttf` | All three sets are instantiated from that variable font; `Segoe UI Variable` is converted from it directly, not synthesized |
+| `BOTH` | `<Family>-VF.ttf` plus static files satisfying the `STATIC` rule | The 12 `Segoe UI` files and the 8 Chinese ones still take the static path (the designer's own static cuts beat interpolated ones); `Segoe UI Variable` uses the supplied VF |
+
+- For `STATIC` and `BOTH`, missing any required weight is a hard error that names the exact
+  files it could not find.
 - Italic styles are optional. Supply them and they are used as-is; leave them out and the
-  six italic outputs are generated by shearing the matching upright.
+  six italic outputs are generated by shearing the matching upright. With a variable source,
+  an `ital` or `slnt` axis gives real italics and only its absence falls back to shearing.
 - Extra styles (`ExtraLight`, `SemiBold`, `SemiLight` …) are used when present and skipped
   when not.
 
-**What you give up when the italics are synthesized.** When an output's whole italic fallback
-chain comes up empty, the generator takes the matching upright source and slants the outlines
-itself: a 12° shear along the baseline, the same angle the real Segoe UI Italic uses. Outputs
-built this way are tagged `(伪斜 12°)` — "synthetic oblique, 12°"; the build log is in
-Chinese — in the plan the generator prints before it starts, so it never happens quietly, and
-a real italic in `source\` always wins over the shear. But a sheared upright is not a drawn
-italic:
+**Whatever the source is missing gets patched in.** See
+"[Patching in missing glyphs](#patching-in-missing-glyphs)" below —
+[`src/patch_glyphs.py`](src/patch_glyphs.py) fills in the Western European accented letters,
+punctuation and symbols that the Windows font being replaced has and the source does not,
+**composing them from the source's own letters wherever it can** and only importing outright
+when it cannot.
 
-- **It destroys the source font's hinting, and that is the one you will see.** TrueType
-  instructions are written against the upright coordinates — they identify stems by point
-  number and snap their edges onto the pixel grid — so on a sheared outline they drag the
-  slanted stems back toward vertical and break up the strokes. That looks worse than no
-  hinting at all, so the generator drops the instructions along with `fpgm`, `prep` and
-  `cvt `. The vertical hinting goes with them, which leaves the synthesized italics blurry
-  and unevenly weighted at the small pixel sizes Windows UI text runs at. Sarasa Gothic, the
-  recommended source, ships real italics and is not affected.
-- A shear is not a redesign: `a`, `e` and `f` keep their upright two-storey shapes instead of
-  becoming the single-storey cursive forms a drawn italic uses.
-- Han strokes shear badly — horizontals and verticals pick up different visual weight once
-  slanted, so characters read lighter or heavier than the upright at the same weight. This
-  cost is latent today: only the Latin `Segoe UI` family is ever sheared and Han is stripped
-  out of it, so it would bite only if a Chinese italic output were added.
-- Spacing is not recomputed: advance widths are untouched and the kerning pairs still
-  describe upright shapes, so slanted pairs sit slightly loose or tight.
-- Tall glyphs can overhang, because the shear pushes them sideways out of the bounding box
-  the upright had.
+To give the Win11 shell genuinely distinct weights, add a `<Family>-VF.ttf` to `source\`
+(the `BOTH` layout): a `Segoe UI Variable` synthesized from a `STATIC` source usually ends up
+with no `wght` axis, leaving the weights to Windows' own synthetic bolding. The 12 static
+`Segoe UI` files are unaffected either way — they have always used one real static weight
+each.
+
+#### Patching in missing glyphs
+
+Whenever the source covers less than the Windows font it replaces, something drops out.
+Dropping out does not mean tofu boxes — the stock chain mechanism 4 preserves, and
+DirectWrite's own fallback, will find the character — but they find it in *another font*, so
+it does not match the surrounding text. The extreme case is real: some sources keep only CJK
+and hit just 110 of the real `segoeui.ttf`'s 3996 codepoints, which leaves the entire UI's
+Western text riding on fallback and that layer doing nothing.
+
+So [`src/patch_glyphs.py`](src/patch_glyphs.py) fills the gaps.
 
 ### 2. Generate the fonts
+
+```bash
+python src\make_vf.py
+```
 
 ```bash
 python src\make_segoe_ui.py
@@ -188,20 +216,25 @@ python src\make_segoe_ui.py
 python src\make_cjk.py
 ```
 
-The first writes 12 files to `SegoeUIMod\` (about 4 MB), the second writes 8 files to
-`CJKMod\` (about 200 MB). Both print which source weight each output was built from before
-they start.
+The first writes `SegoeUI-Variable.ttf` to `SegoeUIMod\` (about 0.4 MB from a static source;
+from a variable source the whole source comes along, so tens of MB), the second writes the 12
+static files to the same directory (about 4 MB), the third writes 8 files to `CJKMod\` (about
+200 MB). All three print which source weight each output was built from before they start;
+`make_vf.py` also prints the source kind, whether it synthesized or converted, and the
+measured interpolation compatibility.
+
+The three are order-independent and write their own outputs (`make_vf.py` and
+`make_segoe_ui.py` share `SegoeUIMod\`, but the filenames do not overlap and each side's
+self-check knows the other's output is not a stale leftover).
+
+Any output that needed patching prints a line reading
+`[补字] 补 N 个码位，拼 X，搬 Y，组合符号 Z；来源 …` — how many codepoints were filled in,
+how many were composed rather than imported, and which files they were borrowed from. See
+"[Patching in missing glyphs](#patching-in-missing-glyphs)" above.
 
 When a generator finishes it immediately runs [`src/verify_fonts.py`](src/verify_fonts.py)
-over its own output and exits non-zero if anything is wrong. The checks are: every expected
-file is present and no stale ones are left over; the identity fields (`name` IDs 1, 2, 4, 6,
-16, 17, both English and Chinese) match the Windows font each file impersonates; the CJK side
-has full Han and symbol coverage while the Latin side has no Han at all; every output named
-`Italic` carries a non-zero `post.italicAngle`, which is what a shear that silently did not
-happen would fail; and `gasp` keeps grayscale and symmetric smoothing on for every size
-range. Output with no TrueType hinting is reported as a warning rather than an error — for an
-upright that means the source font had none, for a synthesized italic it is the shear having
-dropped them. To re-check existing output without rebuilding:
+over its own output and exits non-zero if anything is wrong. To re-check existing output
+without rebuilding:
 
 ```bash
 python src\verify_fonts.py
@@ -249,10 +282,10 @@ Running `main.ps1` with no arguments prints this list.
 
 | Mechanism | Location |
 | --- | --- |
-| 1 | `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts` (20 values), font files in `C:\Fonts` |
+| 1 | `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts` (21 values), font files in `C:\Fonts` |
 | 2 | `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes` (8 values) |
 | 3 | `<each user>\Control Panel\Desktop\WindowMetrics` (6 LOGFONTs + 2 scalars) |
-| 4 | `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink` (up to 5 values) |
+| 4 | `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink` (up to 20 values) |
 
 Left alone on purpose: NSimSun (monospace, used by old programs for table alignment),
 KaiTi / FangSong, the SimSun-ExtB/ExtG rare-character extensions, and Microsoft JhengHei.

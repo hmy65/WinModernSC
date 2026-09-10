@@ -5,14 +5,30 @@
 import math
 import os
 import re
+import shutil
+import tempfile
 
 from fontTools.misc.roundTools import otRound
 from fontTools.ttLib import TTFont, TTCollection, newTable
+from fontTools.varLib import instancer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 SOURCE_DIR = os.path.join(ROOT, "source")
 WINFONTS = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
+
+# make_vf.py 的产物名。放在这里是因为它和 make_segoe_ui.py 那 12 个文件同住
+# SegoeUIMod\ —— 那边的「目录里有没有不该在的旧产物」检查得知道它不是旧文件。
+VF_OUTNAME = "SegoeUI-Variable.ttf"
+
+# 产物必须覆盖的最小字符集。放在这里是因为有两个模块要用【同一份】：
+#   verify_fonts  拿它当不变式检查（缺了就判失败）
+#   patch_glyphs  拿它当补字的下限 —— 「被冒充的那个字体有什么就补什么」是
+#                 主规则，但那条规则挡不住被冒充的字体自己就缺：实测
+#                 simhei.ttf 没有 ™ ¶ © ®，只按主规则补的话黑体那一档补完
+#                 还是过不了自检。两份分开写迟早会对不上。
+MUST_CJK = "←→↑↓■●▲◆○□★☆※°×÷≠≤≥∞√∑∏∫∈℃℅№™§¶©®ⅠⅡⅢ〇々〆‰′″‖"
+MUST_LATIN = "ÀÉÎÕÜàéîõüÑñÇç°±·×÷£¥§©®µ¿"
 
 WIN = (3, 1, 0x409)
 MAC = (1, 0, 0)
@@ -51,6 +67,48 @@ REQUIRED_ALWAYS = ("Regular", "Light")
 # 这两个满足其中一个即可（粗体档可以是 Bold 也可以是 Black）。
 REQUIRED_EITHER = (("Bold",), ("Black",))
 
+# 可变字体那一档的样式名。<Family>-VF.ttf 是【唯一】被认成可变字体的写法 ——
+# 靠文件名而不是「有没有 fvar 表」来认，是为了让校验结果一眼看得出来，也让
+# 「静态 + VF 并存」这种目录的分工是明摆着的，不用开文件才知道。
+VF_STYLE = "VF"
+
+# 源类型。校验的核心产物：make_vf / make_segoe_ui / make_cjk 三个脚本都按它
+# 分支，所以它必须是【明确的三选一】，不能是「猜」出来的。
+STATIC = "STATIC"   # 只有静态字重
+VF = "VF"           # 只有一个 <Family>-VF.ttf
+BOTH = "BOTH"       # 两者都有；静态那半仍须满足 REQUIRED_*
+
+KIND_DESC = {
+    STATIC: "纯静态字重",
+    VF: "纯可变字体",
+    BOTH: "静态 + 可变并存",
+}
+
+
+class Source(object):
+    """source\\ 的校验结果。
+
+    三个生成脚本拿到的都是这一个对象，分支只看 .kind：
+        STATIC  静态那条路（各脚本的现有实现）
+        VF      从 .vf 实例化出各字重再派生
+        BOTH    静态那半已经齐了，走 STATIC 那条路；.vf 留给 make_vf.py 用
+    """
+
+    def __init__(self, family, kind, styles, vf):
+        self.family = family
+        self.kind = kind
+        self.styles = styles    # {规范样式名: (样式名, 路径)}，【不含】VF 那一档
+        self.vf = vf            # <Family>-VF.ttf 的绝对路径，没有就是 None
+
+    def describe(self):
+        """开跑前打的那一行。源类型必须打出来 —— 后面每个分支都由它决定。"""
+        bits = ["%s（%s）" % (self.kind, KIND_DESC[self.kind])]
+        if self.styles:
+            bits.append("静态 %d 个样式" % len(self.styles))
+        if self.vf:
+            bits.append("VF %s" % os.path.basename(self.vf))
+        return "%s : %s" % (self.family, "，".join(bits))
+
 
 def norm_style(style):
     """样式名比对用的规范形式：只留字母数字，全小写。"""
@@ -79,10 +137,20 @@ def upright_chain(chain):
     return tuple(out)
 
 
-def scan_source(srcdir=None):
-    """扫描 source\\，返回 (族名, {规范样式名: (样式名, 路径)})。
+LEGAL_SHAPES = (
+    "source\\ 只认这三种摆法：\n"
+    "  1  纯静态字重：至少 <Family>-Regular.ttf + <Family>-Light.ttf，\n"
+    "     外加 <Family>-Bold.ttf 或 <Family>-Black.ttf 之一\n"
+    "  2  纯可变字体：单独一个 <Family>-VF.ttf\n"
+    "  3  两者并存：<Family>-VF.ttf 加上满足第 1 条的那几个静态文件")
 
-    命名必须是 <Family>-<Style>.ttf，同一目录里 <Family> 必须完全一致。
+
+def scan_source(srcdir=None):
+    """扫描并校验 source\\，返回一个 Source。
+
+    命名必须是 <Family>-<Style>.ttf，同一目录里 <Family> 必须完全一致 ——
+    族名混了直接判非法，不去猜哪一套是主的。样式名 VF 是保留字，指的是
+    可变字体，见 VF_STYLE。
     """
     if srcdir is None:
         srcdir = SOURCE_DIR
@@ -91,6 +159,7 @@ def scan_source(srcdir=None):
 
     families = {}
     styles = {}
+    vfs = []
     bad = []
     for fn in sorted(os.listdir(srcdir)):
         stem, ext = os.path.splitext(fn)
@@ -104,24 +173,76 @@ def scan_source(srcdir=None):
             bad.append(fn)
             continue
         families.setdefault(family, []).append(fn)
-        styles[norm_style(style)] = (style, os.path.join(srcdir, fn))
+        path = os.path.join(srcdir, fn)
+        if norm_style(style) == norm_style(VF_STYLE):
+            vfs.append(path)
+        else:
+            styles[norm_style(style)] = (style, path)
 
     if bad:
-        raise SystemExit("这些文件名不符合 <Family>-<Style>.ttf: %s"
-                         % ", ".join(bad))
-    if not styles:
-        raise SystemExit("%s 里一个 <Family>-<Style>.ttf 都没有。" % srcdir)
+        raise SystemExit("这些文件名不符合 <Family>-<Style>.ttf: %s\n%s"
+                         % (", ".join(bad), LEGAL_SHAPES))
+    if not styles and not vfs:
+        raise SystemExit("%s 里一个 <Family>-<Style>.ttf 都没有。\n%s"
+                         % (srcdir, LEGAL_SHAPES))
     if len(families) > 1:
         detail = "; ".join("%s: %s" % (f, ", ".join(v))
                            for f, v in sorted(families.items()))
         raise SystemExit("source\\ 里混了多个族名，只能放一套字体。%s" % detail)
+    if len(vfs) > 1:
+        raise SystemExit("source\\ 里有 %d 个可变字体，只能放一个: %s"
+                         % (len(vfs), ", ".join(os.path.basename(p) for p in vfs)))
 
     family = list(families)[0]
-    check_required(styles, srcdir, family)
-    return family, styles
+    vf = vfs[0] if vfs else None
+    check_variability(styles, vf)
+
+    if vf and styles:
+        kind = BOTH
+    elif vf:
+        kind = VF
+    else:
+        kind = STATIC
+    # 并存时静态那半照样得齐 —— 12 个 Segoe UI 和 8 个中文族仍然从静态那半
+    # 派生（BOTH 走的就是 STATIC 那条路），少一档就少一档。
+    if kind in (STATIC, BOTH):
+        check_required(styles, srcdir, family, kind)
+    return Source(family, kind, styles, vf)
 
 
-def check_required(styles, srcdir, family):
+def check_variability(styles, vf):
+    """文件名说自己是什么，表结构就得是什么，反过来也一样。
+
+    两种都得挡：
+      · <Family>-VF.ttf 里没有 fvar —— 那是个静态文件，改名了也变不出字重来，
+        后面 instantiate() 会在一个没有轴的字体上切，报的错和真正的原因隔着
+        好几层。
+      · 静态那一档的文件里【有】fvar —— 那是把可变字体当静态用。make_segoe_ui
+        会把它连 fvar/STAT 一起当成静态 Segoe UI 装进去，DirectWrite 于是拿
+        STAT 去推 WSS 家族名，整族的字重档位全乱。
+    """
+    if vf and not has_fvar(vf):
+        raise SystemExit(
+            "%s 没有 fvar 表，不是可变字体。\n"
+            "样式名 %s 是保留给可变字体的；这是个静态文件的话，"
+            "改成它真正的字重名（Regular / Light / Bold …）。"
+            % (os.path.basename(vf), VF_STYLE))
+    wrong = sorted(os.path.basename(p) for _s, p in styles.values() if has_fvar(p))
+    if wrong:
+        raise SystemExit(
+            "这些文件带 fvar 表，是可变字体，却用了静态字重的样式名: %s\n"
+            "可变字体必须叫 <Family>-%s.ttf —— 当成静态文件用的话，"
+            "fvar/STAT 会跟着装进 Segoe UI 那一族，字重档位会乱。"
+            % (", ".join(wrong), VF_STYLE))
+
+
+def has_fvar(path):
+    """只读表目录，不解析任何一张表 —— 20 MB 的文件也是一瞬间的事。"""
+    with TTFont(path, lazy=True) as f:
+        return "fvar" in f
+
+
+def check_required(styles, srcdir, family, kind):
     """必需样式缺了就报错退出，并明确列出缺哪些。"""
     missing = [s for s in REQUIRED_ALWAYS if norm_style(s) not in styles]
 
@@ -135,11 +256,15 @@ def check_required(styles, srcdir, family):
 
     if missing:
         want = " / ".join("%s-%s.ttf" % (family, s) for s in missing)
+        # 并存那种摆法多一条出路：把静态的全撤走，只留 VF，就变成合法的第 2 种。
+        extra = ("" if kind != BOTH else
+                 "\n目录里已经有 %s-%s.ttf 了 —— 静态那几个凑不齐的话，"
+                 "把它们全挪走、只留这一个也是合法的（纯 VF）。"
+                 % (family, VF_STYLE))
         raise SystemExit(
-            "source\\ 缺少必需字重，共 %d 个: %s\n目录: %s\n"
-            "必需的是 Regular / Light，外加 Bold 或 Black。\n"
-            "斜体不是必需的：缺了会拿对应的正体剪切出伪斜体。"
-            % (len(missing), want, srcdir))
+            "source\\ 缺少必需字重，共 %d 个: %s\n目录: %s\n%s\n"
+            "斜体不是必需的：缺了会拿对应的正体剪切出伪斜体。%s"
+            % (len(missing), want, srcdir, LEGAL_SHAPES, extra))
 
 
 def pick_source(styles, chain, what, required=True):
@@ -158,6 +283,138 @@ def pick_source(styles, chain, what, required=True):
     raise SystemExit("%s 找不到可用的源字重，试过: %s" % (what, " -> ".join(chain)))
 
 
+# --------------------------------------------------------- 可变字体源
+# 源是 VF 时，「哪一档」不再是文件名里的样式词，而是 fvar 上的一个坐标。
+# 要哪一档由调用方给一个 usWeightClass —— 各脚本都是从【被冒充的那个系统
+# 字体】读出来的，所以这里不需要任何字重对照表。
+
+def fvar_axis(font, tag):
+    """取 fvar 里的一根轴，没有返回 None。"""
+    for a in font["fvar"].axes:
+        if a.axisTag == tag:
+            return a
+    return None
+
+
+def weight_coord(font, weight):
+    """要 weight 这一档时，wght 轴该停在哪。返回 (坐标, 是否被夹住)。
+
+    源字体的 wght 范围各不相同（实测：HarmonyOS VF 是 40–900、苹方是
+    100–900），要的档位落在范围外就夹到端点 —— 那是这个源能给出的最接近的
+    一档。夹了要报出来，不然「Black 和 Bold 一模一样」看着像 bug。
+    """
+    a = fvar_axis(font, "wght")
+    if a is None:
+        return None, False
+    v = min(max(float(weight), a.minValue), a.maxValue)
+    return v, v != float(weight)
+
+
+def italic_coord(font):
+    """真斜体轴的坐标，没有这根轴返回 None（那就只能算法伪斜）。
+
+    ital 是 0/1 的开关，取 1 那一端；slnt 是角度，按规范负值向右倾，取最小值。
+    """
+    a = fvar_axis(font, "ital")
+    if a is not None:
+        return {"ital": a.maxValue}
+    a = fvar_axis(font, "slnt")
+    if a is not None:
+        return {"slnt": a.minValue}
+    return None
+
+
+def vf_location(font, weight, italic=False):
+    """算出实例化坐标。返回 (坐标表, 是否真斜体, wght 是否被夹住)。
+
+    wght 之外的轴一律停在【源字体自己的默认值】：宽度、光学尺寸这些我们没有
+    立场替源字体选，默认值就是它作者定的那一档。
+    """
+    loc = {}
+    clamped = False
+    for a in font["fvar"].axes:
+        loc[a.axisTag] = a.defaultValue
+    w, clamped = weight_coord(font, weight)
+    if w is not None:
+        loc["wght"] = w
+    ital = italic_coord(font) if italic else None
+    if ital:
+        loc.update(ital)
+    return loc, bool(ital), clamped
+
+
+class VFInstances(object):
+    """一个 VF 源在一次运行里的静态实例缓存。
+
+    实例化一次几十 MB 的可变字体要几十秒，而 12 个 Segoe UI 输出里好几个共用
+    同一档字重（Regular 和 Italic 都是 400，Semibold 和 SemiboldItalic 都是
+    600 …）—— 按 (字重, 斜不斜) 缓存，每档只切一次。
+
+    中间文件落在临时目录，close() 一起删。【不能】往产物目录里放：
+    verify_fonts.stray_files() 会把产物目录里的陌生字体文件当成旧产物报错。
+    """
+
+    def __init__(self, vf_path):
+        self.vf_path = vf_path
+        self._dir = None
+        self._cache = {}
+        # 有没有真斜体轴，开一次就够了。没有的话 italic=True 切出来的和正体
+        # 逐字节相同，先把 key 归一，免得同一档字重白切两遍。
+        with TTFont(vf_path, lazy=True) as f:
+            self.has_italic_axis = italic_coord(f) is not None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+    def instance(self, weight, italic=False):
+        """返回 (静态实例的路径, 是不是真斜体)。
+
+        产物里 fvar / STAT / gvar 那一套全删掉 —— 真的 Segoe UI 静态文件和
+        真的 msyh.ttc 里都没有这些表，留着的话 DirectWrite 会改用 STAT 去推
+        WSS 家族名，我们照抄的那套身份就被绕过去了。
+        """
+        key = (int(weight), bool(italic) and self.has_italic_axis)
+        if key in self._cache:
+            return self._cache[key]
+
+        if self._dir is None:
+            self._dir = tempfile.mkdtemp(prefix="winmodernsc-vf-")
+        font = TTFont(self.vf_path)
+        loc, real_italic, clamped = vf_location(font, weight, key[1])
+        what = "wght %g%s" % (loc.get("wght", 0),
+                              "" if not real_italic else " + 真斜体轴")
+        log("  [VF] 实例化 %s%s ..."
+            % (what, "（源字体的 wght 只到这里，已夹住）" if clamped else ""))
+        font = instancer.instantiateVariableFont(
+            font, loc, inplace=True, optimize=False, updateFontNames=False)
+        for tag in ("fvar", "STAT", "gvar", "avar", "cvar",
+                    "HVAR", "VVAR", "MVAR"):
+            if tag in font:
+                del font[tag]
+        # 名字叫 Italic 的产物，post.italicAngle 必须非零 —— verify_fonts 拿它
+        # 当「轮廓到底斜没斜」的唯一凭据。可真斜体轴切出来的实例常常还是 0
+        # （那个字段不随轴变），补上：slnt 轴本身就是角度，照抄；ital 是 0/1
+        # 的开关，没有角度可抄，用和算法伪斜同一个 12°。
+        if real_italic and not font["post"].italicAngle:
+            slnt = loc.get("slnt")
+            font["post"].italicAngle = slnt if slnt else -ITALIC_ANGLE
+        out = os.path.join(self._dir, "inst_%d%s.ttf"
+                           % (key[0], "i" if real_italic else ""))
+        font.save(out)
+        font.close()
+        self._cache[key] = (out, real_italic)
+        return self._cache[key]
+
+    def close(self):
+        if self._dir and os.path.isdir(self._dir):
+            shutil.rmtree(self._dir, ignore_errors=True)
+        self._dir = None
+        self._cache = {}
+
+
 # ------------------------------------------------------------- 系统字体
 def open_system_font(name, index=None, lazy=False):
     """打开 C:\\Windows\\Fonts 里的一个字体，ttc 按索引取 face。"""
@@ -165,6 +422,20 @@ def open_system_font(name, index=None, lazy=False):
     if path.lower().endswith(".ttc"):
         return TTCollection(path, lazy=lazy).fonts[index or 0]
     return TTFont(path, lazy=lazy)
+
+
+def system_font_weight(name, index=None):
+    """被冒充的那个系统字体的 usWeightClass。源是 VF 时拿它当「切哪一档」。
+
+    这样就不必另立一张「输出 -> 字重」的对照表：clone_identity() 本来就把
+    这个值原样抄进产物，轮廓跟着身份走，两边永远对得上；系统换了版本、某一档
+    的 usWeightClass 变了，也是自动跟着变。
+    """
+    f = open_system_font(name, index, lazy=True)
+    try:
+        return f["OS/2"].usWeightClass
+    finally:
+        f.close()
 
 
 def require_system_fonts(names):

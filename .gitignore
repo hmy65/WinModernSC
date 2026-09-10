@@ -220,6 +220,9 @@ __marimo__/
 # 源字体，自己下载
 source/
 
+# 暂存的字体
+source_backup/
+
 # 生成的字体
 CJKMod/
 SegoeUIMod/

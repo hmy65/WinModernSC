@@ -7,14 +7,17 @@
     四套机制，各管一层，缺一层就有地方换不掉：
       1  Fonts 注册表键     —— 文件级替换。GDI 和 DirectWrite 都吃这一套，
                               覆盖外壳 / UWP / WinUI / 浏览器 / Office。
-                              拉丁那 12 个文件和中文族(微软雅黑/宋体/黑体/
-                              等线)那 8 个一起装，不单独开关。
+                              拉丁那 12 个静态文件、Win11 外壳用的那个可变字体
+                              "Segoe UI Variable"，加上中文族(微软雅黑/宋体/
+                              黑体/等线)那 8 个，一共 21 个一起装，不单独开关。
       2  FontSubstitutes    —— 只有 GDI 认。兜底那些请求 Tahoma /
                               MS Shell Dlg 的旧式 Win32 程序。
       3  WindowMetrics      —— 经典界面(comctl32)那一层的字体和字号。
                               前两套改不了字号，这一套才行。每用户。
-      4  FontLink\SystemLink —— GDI 的中文回退链。Segoe UI 那 12 个文件的
+      4  FontLink\SystemLink —— GDI 的中文回退链。Segoe UI 那 12 个静态文件的
                               汉字被裁掉了，GDI 程序显示中文全靠这张表。
+                              20 个族：静态那 5 个，加 Segoe UI Variable 被
+                              STAT 拆出来的 15 个（3 档光学尺寸 × 5 档字重）。
 
     用法见 README.md / README_zh-CN.md。
 

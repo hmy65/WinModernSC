@@ -4,10 +4,17 @@
 # name 表读族名，所以这一层两条渲染路径都认，覆盖面最广。
 #
 # 两组文件：
-#   拉丁 = "Segoe UI" 那 12 个（SegoeUIMod\）
+#   拉丁 = "Segoe UI" 那 12 个静态文件 + "Segoe UI Variable" 那 1 个可变字体
+#          （都在 SegoeUIMod\）
 #   汉字 = 微软雅黑/宋体/黑体/等线 那 8 个（CJKMod\）
-# 两组一起装：Segoe UI 那 12 个文件的汉字已经裁掉了，外壳的中文要靠回退落到
+# 两组一起装：拉丁那些文件的汉字已经裁掉了，外壳的中文要靠回退落到
 # 「微软雅黑」，也就是落到汉字这一组。只装其中一半，中文就还是原版微软雅黑。
+#
+# Segoe UI Variable 是【另一个】注册项、另一个文件：Windows 11 的外壳（设置、
+# 开始菜单、通知中心）和所有 WinUI 3 程序用的是它，不是上面那 12 个静态文件。
+# 少了它，Win11 外壳那一层文字就一直是微软原版。和另外 20 个一起装、一起还原，
+# 不单独开关 —— 它和那 12 个静态文件是同一族的两种形态，分开装只会得到一半
+# 换了一半没换的界面。
 #
 # 不动的：新宋体(等宽，老程序拿它对齐表格)、楷体/仿宋(书法体)、
 #         SimSun-ExtB/ExtG(生僻字扩展)、微軟正黑體(繁体)。
@@ -27,6 +34,7 @@ $MapUI = [ordered]@{
     'Segoe UI Semibold Italic (TrueType)'  = 'SegoeUIMod\SegoeUI-SemiboldItalic.ttf'
     'Segoe UI Black (TrueType)'            = 'SegoeUIMod\SegoeUI-Black.ttf'
     'Segoe UI Black Italic (TrueType)'     = 'SegoeUIMod\SegoeUI-BlackItalic.ttf'
+    'Segoe UI Variable (TrueType)'         = 'SegoeUIMod\SegoeUI-Variable.ttf'
 }
 
 $MapCJK = [ordered]@{
@@ -59,6 +67,9 @@ function Get-FontSourceState {
 
 function Get-MissingFontHint($rel) {
     if ($rel -like 'CJKMod\*') { return 'python src\make_cjk.py' }
+    # SegoeUIMod\ 里住着两个脚本的产物：12 个静态文件归 make_segoe_ui.py，
+    # 那一个可变字体归 make_vf.py。按目录分不出来，得按文件名分。
+    if ($rel -like '*\SegoeUI-Variable.ttf') { return 'python src\make_vf.py' }
     return 'python src\make_segoe_ui.py'
 }
 

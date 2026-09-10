@@ -1,12 +1,16 @@
 ﻿# 机制 4：FontLink\SystemLink，GDI 的中文回退链。
 #
-# Segoe UI 那 12 个文件的汉字被裁掉了（拉丁归它，汉字归中文族），GDI 程序拿
-# 它们显示中文全靠这张表。可系统自带的链是按【文件名】写的：
+# Segoe UI 那 12 个静态文件的汉字被裁掉了（拉丁归它，汉字归中文族），
+# SegoeUI-Variable.ttf 从静态源合成时同样是裁到真 SegUIVar 覆盖面、不带汉字。
+# GDI 程序拿它们显示中文全靠这张表。可系统自带的链是按【文件名】写的：
 #     MSYH.TTC,Microsoft YaHei UI
 # GDI 会直接去 %windir%\Fonts 拿原版雅黑，【绕过】机制 1 改的 Fonts 注册项 ——
 # 于是 DirectWrite 那边是新字体、GDI 这边是原版雅黑，同一屏两套中文。
-# 办法是在这 5 个拉丁族的链最前面插指向我们文件的行（带缩放参数那条 + 不带的
+# 办法是在这些拉丁族的链最前面插指向我们文件的行（带缩放参数那条 + 不带的
 # 那条，和原链一个形状），两边就统一了。
+#
+# 一共 20 个族：静态那 5 个（下面 $LinkFaces），加上可变字体 Segoe UI Variable
+# 被 STAT 拆出来的 15 个（3 档光学尺寸 × 5 档字重，见 $VarWeightCuts）。
 
 # 键名是【GDI 家族名】，也就是 GetTextFace 返回的那个，不是"族名 + 字重"。
 #
@@ -44,6 +48,60 @@ $LinkFaces = [ordered]@{
                               Face = 'Microsoft YaHei UI' }
     'Segoe UI Black'     = @{ Reg  = 'Microsoft YaHei Bold & Microsoft YaHei UI Bold (TrueType)'
                               Face = 'Microsoft YaHei UI Bold' }
+}
+
+# ---------------------------------------------------------------- 可变字体那一族
+# Segoe UI Variable 不是一个 GDI 家族，是 15 个：DirectWrite 按 STAT 把它拆成
+# 光学尺寸 3 档 × 字重 5 档，每一档都是独立的 GDI 家族名，各有各的 SystemLink。
+# 这 15 条系统自带（Win11 26200 实测全在），指向的都是裸文件名 MSYH*.TTC ——
+# 和静态那 5 个族一模一样的问题：GDI 会绕过机制 1 改的 Fonts 项，直接去
+# %windir%\Fonts 拿原版雅黑。产物是 DirectWrite 那边新字体、GDI 这边原版雅黑。
+#
+# 【为什么非补不可】：STATIC 源合成出来的 SegoeUI-Variable.ttf 是裁到真
+# SegUIVar 覆盖面的，一个汉字都没有（和那 12 个静态文件同一个道理），GDI 程序
+# 拿它显示中文全靠这张表。源本身是可变字体时产物带汉字，走不到这几行，插了也
+# 只是多几行不生效的，没有代价。
+#
+# 挂哪一档【照抄原链】，和静态那 5 个族的规矩一致（实测每一条都对得上）：
+#     无后缀 / Semilight / Semibold -> MSYH.TTC   Microsoft YaHei UI
+#     Light                         -> MSYHL.TTC  Microsoft YaHei UI Light
+#     Bold                          -> MSYHBD.TTC Microsoft YaHei UI Bold
+# 缩放后缀不写死，Get-LinkScaleSuffix 按 face 名从原链里抄（这 15 条原链的
+# 雅黑行全都带 ,128,96，抄出来就是它）。
+$VarWeightCuts = [ordered]@{
+    ''          = @{ Reg  = 'Microsoft YaHei & Microsoft YaHei UI (TrueType)'
+                     Face = 'Microsoft YaHei UI' }
+    'Light'     = @{ Reg  = 'Microsoft YaHei Light & Microsoft YaHei UI Light (TrueType)'
+                     Face = 'Microsoft YaHei UI Light' }
+    'Semilight' = @{ Reg  = 'Microsoft YaHei & Microsoft YaHei UI (TrueType)'
+                     Face = 'Microsoft YaHei UI' }
+    'Semibold'  = @{ Reg  = 'Microsoft YaHei & Microsoft YaHei UI (TrueType)'
+                     Face = 'Microsoft YaHei UI' }
+    'Bold'      = @{ Reg  = 'Microsoft YaHei Bold & Microsoft YaHei UI Bold (TrueType)'
+                     Face = 'Microsoft YaHei UI Bold' }
+}
+
+# GDI 家族名最长 31 个字符：LOGFONT.lfFaceName 是 LF_FACESIZE = 32 个 WCHAR，
+# 含结尾的 NUL。超出的直接截断，注册表里那几个看着像打错字的值名就是这么来的：
+#     "Segoe UI Variable Display Semibold" -> "Segoe UI Variable Display Semib"
+#     "Segoe UI Variable Small Semilight"  -> "Segoe UI Variable Small Semilig"
+# 按同一条规则拼出来的 15 个名字和 Win11 自带的那 15 个值名逐字相同（实测）。
+# 万一以后的 Windows 改了命名，这里拼出来的就成了 15 个没人查的新值 —— 备份
+# 里记成「原本不存在」，-revert 时删掉，不留残渣。和 Segoe UI Black 那条本来
+# 就不存在的值是同一个处理方式。
+$LF_FACESIZE = 31
+
+function Get-GdiFaceName([string]$name) {
+    if ($name.Length -le $LF_FACESIZE) { return $name }
+    return $name.Substring(0, $LF_FACESIZE)
+}
+
+foreach ($size in @('Small', 'Text', 'Display')) {
+    foreach ($cut in $VarWeightCuts.Keys) {
+        $full = ('Segoe UI Variable {0} {1}' -f $size, $cut).Trim()
+        $spec = $VarWeightCuts[$cut]
+        $LinkFaces[(Get-GdiFaceName $full)] = @{ Reg = $spec.Reg; Face = $spec.Face }
+    }
 }
 
 # 我们自己装的字体一律落在 $TargetDir 下。插入和剔除都按这一条判定 ——
@@ -152,7 +210,9 @@ function Show-FontLinkPlan {
         $cur = Get-RegValueOrNull $FontLinkKey $face
         $new = Get-CjkLinkTargets $face $cur
         $ours = Get-OurLinkLine $new
-        Write-Host ('  {0,-20} : {1} 条  ->  {2} 条' -f $face,
+        # 列宽 31 = GDI 家族名的上限（LF_FACESIZE - 1），可变字体那 15 个正好
+        # 顶到这个长度，窄了会把后面的列全顶歪。
+        Write-Host ('  {0,-31} : {1,2} 条  ->  {2,2} 条' -f $face,
                     $(if ($null -eq $cur) { 0 } else { @($cur).Count }), $new.Count)
         $ourLines = @($new | Where-Object { Test-OurFontFile $_ })
         if ($ours) {
@@ -209,13 +269,13 @@ function Invoke-FontLinkApply {
         if (-not $ours) {
             # 机制 1 没装过。原链原样留着别动；Segoe UI Black 本来就没这个值，
             # 更不能凭空建一条只有原链残渣、甚至是空的出来。
-            Write-Host ("[FontLink] {0,-20} 跳过（机制 1 未安装，没有可插入的行）" -f $face) -ForegroundColor DarkGray
+            Write-Host ("[FontLink] {0,-31} 跳过（机制 1 未安装，没有可插入的行）" -f $face) -ForegroundColor DarkGray
             continue
         }
         Set-ItemProperty -Path $FontLinkKey -Name $face -Value $chain -Type MultiString
         $script:WroteSomething = $true
         $wrote++
-        Write-Host ("[FontLink] {0,-20} {1} 条，首行 {2}" -f $face, $chain.Count, $ours) -ForegroundColor Green
+        Write-Host ("[FontLink] {0,-31} {1,2} 条，首行 {2}" -f $face, $chain.Count, $ours) -ForegroundColor Green
     }
     return $wrote
 }

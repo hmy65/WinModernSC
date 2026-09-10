@@ -3,12 +3,18 @@
 """
 产出物自检：身份字段、覆盖、hinting、gasp 是不是都对。
 
-两侧的不变式是【相反】的，别搞混：
-    CJKMod\\      必须有汉字、有符号
-    SegoeUIMod\\  必须【没有】汉字 —— 剥干净了，中文才会回退到 CJKMod 那一套
+三侧的不变式不一样，别搞混：
+    CJKMod\\                     必须有汉字、有符号
+    SegoeUIMod\\ 那 12 个静态     必须【没有】汉字 —— 剥干净了，中文才会回退
+                                 到 CJKMod 那一套
+    SegoeUIMod\\SegoeUI-Variable  必须有 fvar + STAT，而且 STAT 里得有非 WSS
+                                 轴 —— 家族拆成 Small / Text / Display 全靠它。
+                                 汉字有没有【不查】：合成出来的那条路裁到了真
+                                 SegUIVar 的覆盖面（没有汉字），源自带 VF 那条
+                                 路是整个搬过来的（有汉字），两种都对。
 
-make_cjk.py 和 make_segoe_ui.py 生成完会自动跑对应的那一半。也可以两边一起
-单独跑一遍（不需要 source\\，只看产物）：
+make_cjk.py / make_segoe_ui.py / make_vf.py 生成完会自动跑对应的那一份。也可以
+三份一起单独跑一遍（不需要 source\\，只看产物）：
 
     python src\\verify_fonts.py
 """
@@ -20,8 +26,9 @@ from fontTools.ttLib import TTFont, TTCollection
 import util
 from util import log
 
-# 中文里的高频符号，中文族必须全有
-PROBE = "←→↑↓■●▲◆○□★☆※°×÷≠≤≥∞√∑∏∫∈℃℅№™§¶©®ⅠⅡⅢ〇々〆‰′″‖"
+# 中文里的高频符号，中文族必须全有。定义在 util 里 —— patch_glyphs 拿同一份
+# 当补字的下限，两处分开写迟早对不上。
+PROBE = util.MUST_CJK
 # 覆盖面探针，从常用到生僻
 HANZI = "汉字测试壹贰叁国际标准万象更新龘齉"
 # 横画密集的字，用来看有没有逐字形的 hinting 指令
@@ -29,6 +36,21 @@ DENSE = "最具量工书面直真置章"
 # 拉丁那一侧的对应探针。SegoeUIMod\ 里一个汉字都没有（那正是它的不变式），
 # 拿 DENSE 去量必然是 0，量不出任何东西 —— 那边必须用这一组。
 DENSE_LATIN = "AaBbEeHhMmNnRSgo0123"
+
+# 拉丁那一侧的必需覆盖，作用和中文那侧的 PROBE 一样。
+#
+# 【不能按比例卡】：真 segoeui.ttf 有 3996 个码位，一大半是 IPA、组合用变音
+# 符号、稀有拉丁扩展，中文字体本来就不会全带 —— 实测更纱黑体命中 47%、
+# HarmonyOS Sans SC 命中 20%，两个都是好用的源。
+#
+# 卡的是这一小撮：西欧重音字母加几个基本符号，任何能当界面字体用的字体都有。
+# 一个都没有就说明这个源【根本不带拉丁】，只有 ASCII —— 实测有这种源（某些
+# 只保留 CJK 的精简版可变字体，命中 3996 里的 110 个），顶上去之后 Segoe UI
+# 那一族只剩两百来个字形，西文全靠回退，等于这一层白装了。这种情况必须当场
+# 拦下来，不能让它安静地过 —— 「没有汉字」是这一族的不变式，光凭那一条它是
+# 能过的。
+# 同样定义在 util 里，patch_glyphs 拿同一份当补字下限。
+LATIN = util.MUST_LATIN
 
 GASP_DOGRAY = 0x02
 GASP_SYM_SMOOTHING = 0x08
@@ -98,6 +120,31 @@ def missing_chars(font, chars):
 def present_chars(font, chars):
     cm = font.getBestCmap()
     return "".join(c for c in chars if ord(c) in cm)
+
+
+def blank_chars(font, chars):
+    """cmap 里有、字形却是空的。补字那条路唯一会静默出错的地方。
+
+    missing_chars 只看 cmap，而 patch_glyphs 拼复合字形时万一 component 引用
+    了一个空字形、或者摆位算出个空框，产物照样有 cmap 条目、照样过覆盖检查，
+    渲染出来是一片空白。空格类字符本来就该是空的，按 Unicode 类别排除掉。
+    """
+    import unicodedata
+    cm, glyf = font.getBestCmap(), font.get("glyf")
+    if glyf is None:
+        return ""
+    out = []
+    for c in chars:
+        gn = cm.get(ord(c))
+        if gn is None or unicodedata.category(c) == "Zs":
+            continue
+        g = glyf[gn]
+        if g.isComposite():
+            if not g.components:
+                out.append(c)
+        elif g.numberOfContours == 0:
+            out.append(c)
+    return "".join(out)
 
 
 def italic_problem(font, outname):
@@ -256,6 +303,10 @@ def verify_cjk(targets, outdir):
                     gone = missing_chars(font, PROBE)
                     if gone:
                         bad.append("缺符号 %s" % gone)
+                    blank = blank_chars(font, PROBE)
+                    if blank:
+                        bad.append("这些符号有 cmap 条目但字形是空的 %s —— "
+                                   "补字那一步搬了个空壳" % blank)
                     g = gasp_problem(font)
                     if g:
                         bad.append(g)
@@ -282,13 +333,17 @@ def verify_cjk(targets, outdir):
 
 
 # ------------------------------------------------------------------ 拉丁族
-def verify_segoe(styles, outdir):
-    """SegoeUIMod\\：不变式反过来 —— 汉字必须已经裁掉，交给回退。"""
+def verify_segoe(styles, outdir, also=()):
+    """SegoeUIMod\\：不变式反过来 —— 汉字必须已经裁掉，交给回退。
+
+    also 是同一个目录里【别的脚本】的产物（SegoeUI-Variable.ttf），只用来让
+    stray_files 别把它当成旧文件报出来；它自己的检查在 verify_vf。
+    """
     fails, warns = [], []
     log("")
     log("自检 SegoeUIMod\\ —— 汉字应已裁掉，交给回退落到 CJKMod")
 
-    for name in stray_files(outdir, [s[0] for s in styles]):
+    for name in stray_files(outdir, [s[0] for s in styles] + list(also)):
         fails.append("SegoeUIMod\\%s 不在产物清单里（旧文件？）" % name)
 
     for outname, realname, _chain, _reg in styles:
@@ -314,6 +369,14 @@ def verify_segoe(styles, outdir):
             left = present_chars(font, HANZI)
             if left:
                 bad.append("还留着汉字 %s —— 中文不会回退到 CJKMod 那一套" % left)
+            gone = missing_chars(font, LATIN)
+            if gone:
+                bad.append("缺基本拉丁 %s —— 源字体不带西欧重音字母和基本符号，"
+                           "这一族顶上去等于把西文整个交给回退" % gone)
+            blank = blank_chars(font, LATIN)
+            if blank:
+                bad.append("这些字有 cmap 条目但字形是空的 %s —— 补字那一步"
+                           "拼出空壳了" % blank)
             g = gasp_problem(font)
             if g:
                 bad.append(g)
@@ -335,6 +398,114 @@ def verify_segoe(styles, outdir):
     return fails, warns
 
 
+# ------------------------------------------------------------ 可变字体
+def verify_vf(path, realname=None):
+    """SegoeUIMod\\SegoeUI-Variable.ttf：Windows 得把它认成 Segoe UI Variable。
+
+    查的重点和另外两侧完全不同 —— 那两侧看的是覆盖和轮廓，这一侧看的是
+    **DirectWrite 拆家族的那套元数据**：fvar 给坐标、STAT 给命名和拆分规则。
+    STAT 里那根非 WSS 轴（opsz）是 Small / Text / Display 三个家族的唯一来源，
+    丢了它整个文件就塌成一个家族，Win11 外壳照样落回微软原版。
+    """
+    import make_vf                    # 反过来它也 import 本模块，放函数里
+    if realname is None:
+        realname = make_vf.REAL
+
+    fails, warns = [], []
+    log("")
+    log("自检 %s —— 应有 fvar + STAT，家族拆成 Small / Text / Display"
+        % os.path.basename(path))
+
+    if not os.path.exists(path):
+        log("  [缺失] %s" % os.path.basename(path))
+        return ["%s 不存在" % os.path.basename(path)], warns
+    try:
+        font = TTFont(path, lazy=True)
+    except Exception as e:
+        log("  [坏文件] %s" % os.path.basename(path))
+        return ["%s 打不开: %s" % (os.path.basename(path), e)], warns
+
+    name = os.path.basename(path)
+    with font:
+        bad = []
+        real = util.open_system_font(realname, lazy=True)
+        try:
+            bad += identity_problems(font, real)
+            real_tags = {a.axisTag for a in real["fvar"].axes}
+            real_wss = {a.AxisTag for a in real["STAT"].table.DesignAxisRecord.Axis
+                        if a.AxisTag in ("wght", "wdth", "ital", "slnt")}
+        finally:
+            real.close()
+
+        if "fvar" not in font:
+            bad.append("没有 fvar —— 这不是可变字体，Windows 不会拆出 "
+                       "Small / Text / Display 三个家族")
+            tags = set()
+        else:
+            tags = {a.axisTag for a in font["fvar"].axes}
+            if not font["fvar"].instances:
+                bad.append("fvar 里一个命名实例都没有")
+
+        if "STAT" not in font:
+            bad.append("没有 STAT —— 家族拆分全靠它，缺了会塌成一个家族"
+                       "（实测：只保留 fvar 实例名、删掉 STAT，就只剩 "
+                       "Regular 和 Bold）")
+            stat_tags = set()
+        else:
+            rec = font["STAT"].table.DesignAxisRecord
+            stat_tags = {a.AxisTag for a in (rec.Axis if rec else [])}
+            missing = sorted(stat_tags - tags)
+            if missing:
+                bad.append("STAT 里有 fvar 上没有的轴 %s" % "、".join(missing))
+
+        # 非 WSS 轴（真 SegUIVar 里就是 opsz）是三个家族的唯一来源
+        split = sorted((real_tags & stat_tags) - real_wss)
+        if not split:
+            bad.append("STAT 里没有非 WSS 轴（真 %s 靠 opsz 拆出 "
+                       "Small / Text / Display）—— 家族拆不开" % realname)
+
+        # 字重轴没有不算错，但必须说出来：那是「源字重之间不能插值」的退路，
+        # 见 make_vf.synthesize。字重档交给 Windows 合成加粗。
+        if "wght" not in tags:
+            warns.append("%s 没有 wght 轴 —— 只有一档字重，Semibold / Bold 由 "
+                         "Windows 合成加粗（源字重之间不能插值时的退路）" % name)
+
+        # 默认实例就是系统眼里的 Regular，两边对不上会拿到一档没打算给的字重
+        wax = util.fvar_axis(font, "wght") if "wght" in tags else None
+        if wax and wax.defaultValue != font["OS/2"].usWeightClass:
+            bad.append("wght 轴默认值 %g != OS/2.usWeightClass %d，"
+                       "系统认的 Regular 和默认实例不是同一档"
+                       % (wax.defaultValue, font["OS/2"].usWeightClass))
+
+        gone = missing_chars(font, LATIN)
+        if gone:
+            bad.append("缺基本拉丁 %s —— 源字体不带西欧重音字母和基本符号，"
+                       "Win11 外壳的西文会整个交给回退" % gone)
+        blank = blank_chars(font, LATIN)
+        if blank:
+            bad.append("这些字有 cmap 条目但字形是空的 %s —— 补字那一步"
+                       "拼出空壳了" % blank)
+        g = gasp_problem(font)
+        if g:
+            bad.append(g)
+        it = italic_problem(font, name)
+        if it:
+            bad.append(it)
+        hb = hint_bytes(font, DENSE_LATIN)
+        if hb == 0:
+            warns.append("%s 没有 hinting 指令（%s）—— 小字号的拉丁笔画会糊"
+                         % (name, hint_zero_note(name)))
+
+        fails += ["%s %s" % (name, b) for b in bad]
+        log("  %s %-28s %-20s %5d 字形  fvar[%s]  STAT[%s]  %d 实例  hint %-5s gasp %s"
+            % ("OK " if not bad else "!! ", name, name_of(font, 1) or "?",
+               font["maxp"].numGlyphs,
+               "、".join(sorted(tags)) or "-", "、".join(sorted(stat_tags)) or "-",
+               len(font["fvar"].instances) if "fvar" in font else 0,
+               "%dB" % hb, fmt_gasp(font)))
+    return fails, warns
+
+
 def report(fails, warns=()):
     """打印自检结论。有失败就非零退出。"""
     log("")
@@ -349,13 +520,17 @@ def report(fails, warns=()):
 
 
 def main():
-    # 放在函数里 import：这两个模块反过来也要 import 本模块
+    # 放在函数里 import：这几个模块反过来也要 import 本模块
     import make_cjk
     import make_segoe_ui
+    import make_vf
 
-    f1, w1 = verify_segoe(make_segoe_ui.STYLES, make_segoe_ui.OUTDIR)
-    f2, w2 = verify_cjk(make_cjk.TARGETS, make_cjk.OUTDIR)
-    report(f1 + f2, w1 + w2)
+    vf_path = os.path.join(make_vf.OUTDIR, make_vf.OUTNAME)
+    f1, w1 = verify_segoe(make_segoe_ui.STYLES, make_segoe_ui.OUTDIR,
+                          also=[make_vf.OUTNAME])
+    f2, w2 = verify_vf(vf_path)
+    f3, w3 = verify_cjk(make_cjk.TARGETS, make_cjk.OUTDIR)
+    report(f1 + f2 + f3, w1 + w2 + w3)
 
 
 if __name__ == "__main__":
