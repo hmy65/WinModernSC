@@ -211,8 +211,10 @@ function Convert-LogFontDpi([byte[]]$b, [int]$fromDpi, [int]$toDpi) {
 # 这次的参数，跟跑过几次无关。
 #   新字号比原来的大 -> Raise，Px 抬到放得下新字号，但不低于原来的高度
 #   否则             -> 还原：Raw 是原来的注册表值（$null = 原本没有这一项），
-#                       Twips 是解析出来的数（解析不了是 $null，那就别碰）
-# 原本就没有标题栏字体的配置单元（.DEFAULT、新用户模板）按 Windows 默认的 9pt 比。
+#                       Twips 是解析出来的数（解析不了是 $null，那就别碰），
+#                       Px 是原来的高度，给表达不了「没有这一项」的 SPI 用
+# 原本就没有标题栏字体的配置单元（.DEFAULT、新用户模板）按 Windows 默认的 9pt 比；
+# 没有标题栏高度（或解析不了）的按 Windows 默认的 -330 twip（96 DPI 下 22px）算。
 function Get-CaptionTarget($Original, [int]$NewFontPx, [int]$Dpi) {
     $vals = Get-MapValue $Original 'Values'
     $fontPx = [Math]::Abs((Get-MetricsHeight 9 $Dpi))
@@ -226,7 +228,8 @@ function Get-CaptionTarget($Original, [int]$NewFontPx, [int]$Dpi) {
     $raw = Get-MapValue $vals 'CaptionHeight'
     $tw = 0
     $twips = if ($null -ne $raw -and [int]::TryParse([string]$raw, [ref]$tw)) { $tw } else { $null }
-    $px = if ($null -ne $twips) { Get-Rounded ([Math]::Abs($twips) * $Dpi / 1440) } else { 0 }
+    $px = if ($null -ne $twips) { Get-Rounded ([Math]::Abs($twips) * $Dpi / 1440) }
+          else                  { Get-Rounded (330 * $Dpi / 1440) }
     $raise = $NewFontPx -gt $fontPx
     if ($raise) { $px = [Math]::Max($px, $NewFontPx + 10 * (Get-Rounded ($Dpi / 96))) }
     return [pscustomobject]@{ Raise = $raise; Px = $px; Raw = $raw; Twips = $twips }
@@ -280,7 +283,9 @@ function Get-MetricsTargets {
     $plKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList'
     foreach ($sub in (Get-ChildItem $plKey -ErrorAction SilentlyContinue)) {
         $sid = Split-Path $sub.Name -Leaf
-        if ($sid -notlike 'S-1-5-21-*') { continue }        # 跳过 SYSTEM/LOCAL/NETWORK SERVICE
+        # 真人账户只有两种 SID：本地 / 域账户 S-1-5-21-*，Entra ID（Azure AD）
+        # 账户 S-1-12-1-*。SYSTEM / LOCAL / NETWORK SERVICE 这些跳过。
+        if ($sid -notlike 'S-1-5-21-*' -and $sid -notlike 'S-1-12-1-*') { continue }
         $img = $null
         try { $img = (Get-ItemProperty $sub.PSPath -Name ProfileImagePath -ErrorAction Stop).ProfileImagePath } catch { }
         if (-not $img) { continue }
@@ -342,8 +347,9 @@ function Invoke-Reg {
 #
 # 本函数的局部变量【一律加 hive 前缀】。PowerShell 的 scriptblock 是动态作用域：
 # & $Action 里出现的自由变量先在本函数的局部里找，找不到才往调用方走 —— 调用方
-# 传进来的 scriptblock 靠的正是后者（比如 $entry / $hiveDpi）。局部名撞上调用方
-# 的变量名会把它悄悄换掉，而且没有任何报错。
+# 传进来的 scriptblock 靠的正是后者（比如 $entry / $entryDpi）。局部名撞上调用方
+# 的变量名会把它悄悄换掉，而且没有任何报错。反过来，调用方交给 scriptblock 的
+# 变量也别以 hive 打头。
 function Invoke-OnUserHive {
     param($Target, [scriptblock]$Action)
 
@@ -588,13 +594,12 @@ function Set-MetricsViaSpi {
         # 这里的几何值是【像素】，不是注册表那套 twip
         if (-not $LogFonts) {
             # 标题栏高度按备份里的原值算，见 Get-CaptionTarget。会话里没有「这一项
-            # 不存在」这个状态，原值缺了（或解析不了）又不用抬高时，只能维持现状。
+            # 不存在」这个状态，原值缺了（或解析不了）就用 Windows 的默认高度。不能
+            # 维持现状：现状可能是上一趟我们自己抬高的，先 14pt 再 9pt 就回不来了。
             if ($Original) {
                 $newCaptionH = [BitConverter]::ToInt32($buf, $NcmFontOffset['CaptionFont'])
                 $cap = Get-CaptionTarget $Original ([Math]::Abs($newCaptionH)) $dpi
-                if ($cap.Raise -or $null -ne $cap.Twips) {
-                    [Array]::Copy([BitConverter]::GetBytes([int]$cap.Px), 0, $buf, $NCM_OFF_CAPTIONHEIGHT, 4)
-                }
+                [Array]::Copy([BitConverter]::GetBytes([int]$cap.Px), 0, $buf, $NCM_OFF_CAPTIONHEIGHT, 4)
             }
             if ([BitConverter]::ToInt32($buf, $NCM_OFF_PADDEDBORDER) -eq 0) {
                 $pb = 1 + (Get-Rounded ($dpi / 96))
@@ -784,7 +789,7 @@ function Restore-WindowMetricsSection($saved) {
             # SPI_SET 带 SPIF_UPDATEINIFILE 会自己落盘，放在后面就会把刚还原好的
             # 注册表值又盖掉一次。注册表放最后才是最终裁决，「原本不存在」的条目
             # 也才能真正被删掉。
-            $hiveDpi = if ($entry.Dpi) { [int]$entry.Dpi } else { 96 }
+            $entryDpi = if ($entry.Dpi) { [int]$entry.Dpi } else { 96 }
 
             if ($t.Sid -eq $mySid) {
                 # 缺项不能让整趟 SPI 都不做：有几项还几项，缺的用模板补，
@@ -797,10 +802,10 @@ function Restore-WindowMetricsSection($saved) {
                     if ($v) { $lf[$role] = [Convert]::FromBase64String([string]$v); continue }
                     $filled += $role
                     if ($tmpl) {
-                        $lf[$role] = Convert-LogFontDpi $tmpl.Bytes $tmpl.Dpi $hiveDpi
+                        $lf[$role] = Convert-LogFontDpi $tmpl.Bytes $tmpl.Dpi $entryDpi
                     } else {
                         $lf[$role] = Set-LogFontFields -Bytes $null -Face 'Segoe UI' `
-                            -Height (Get-MetricsHeight 9 $hiveDpi) -Weight 400 `
+                            -Height (Get-MetricsHeight 9 $entryDpi) -Weight 400 `
                             -CharSet 1 -Quality 5
                     }
                 }
@@ -814,7 +819,7 @@ function Restore-WindowMetricsSection($saved) {
                     if (-not [int]::TryParse([string]$v, [ref]$tw)) { continue }
                     $geo[$n] = $tw
                 }
-                [void](Set-MetricsViaSpi -LogFonts $lf -MetricsTwips $geo -FromDpi $hiveDpi)
+                [void](Set-MetricsViaSpi -LogFonts $lf -MetricsTwips $geo -FromDpi $entryDpi)
                 Write-Host ('[经典] {0,-42} 已通过 SystemParametersInfo 立即生效' -f `
                             $t.Who) -ForegroundColor Green
                 if ($filled.Count) {
@@ -823,7 +828,7 @@ function Restore-WindowMetricsSection($saved) {
                 }
             }
 
-            Invoke-OnUserHive $t { param($root) Restore-MetricsHive $root $entry.Values -FromDpi $hiveDpi } | Out-Null
+            Invoke-OnUserHive $t { param($root) Restore-MetricsHive $root $entry.Values -FromDpi $entryDpi } | Out-Null
             Write-Host ('[经典] {0,-42} 注册表已还原' -f $t.Who) -ForegroundColor Green
         } catch {
             Write-Host ('[经典] {0,-42} 还原失败: {1}' -f $t.Who, $_.Exception.Message) -ForegroundColor Red

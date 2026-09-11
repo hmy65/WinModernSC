@@ -180,25 +180,30 @@ function Invoke-FontsApply {
     }
 
     $installedFiles = @()
-    foreach ($s in $state) {
-        $r = Copy-FontFile $s.Src $TargetDir
-        $script:WroteSomething = $true
-        Set-ItemProperty -Path $FontsKey -Name $s.Key -Value $r.Path
-        $installedFiles += $r.Path
-        $suffix = if ($r.Note) { "   [$($r.Note)]" } else { '' }
-        Write-Host ("[Fonts] {0,-44} -> {1}{2}" -f $s.Key, $r.Path, $suffix) -ForegroundColor Green
+    # 清单在 finally 里落盘：复制到一半失败（磁盘满、换了文件名还是写不进去）
+    # 时，前面已经复制过去的文件也得记上，否则 -revert 拿不到清单，这些文件
+    # 连同 $TargetDir 都会留在盘上。
+    try {
+        foreach ($s in $state) {
+            $r = Copy-FontFile $s.Src $TargetDir
+            $installedFiles += $r.Path
+            $script:WroteSomething = $true
+            Set-ItemProperty -Path $FontsKey -Name $s.Key -Value $r.Path
+            $suffix = if ($r.Note) { "   [$($r.Note)]" } else { '' }
+            Write-Host ("[Fonts] {0,-44} -> {1}{2}" -f $s.Key, $r.Path, $suffix) -ForegroundColor Green
+        }
+    } finally {
+        # 安装清单，供 -revert 清理。并入上次记录的文件，这样历史上因占用而改过名的
+        # 旧文件也不会被漏掉。
+        $allFiles = @($installedFiles)
+        if ($prevInst) { $allFiles += @(Get-MapValue $prevInst 'Files' | Where-Object { $_ }) }
+        Set-MapValue $bk 'Install' ([ordered]@{
+            TargetDir  = $TargetDir
+            CreatedDir = $createdDir
+            Files      = @($allFiles | Sort-Object -Unique)
+        })
+        Write-BackupFile $bk
     }
-
-    # 安装清单，供 -revert 清理。并入上次记录的文件，这样历史上因占用而改过名的
-    # 旧文件也不会被漏掉。
-    $allFiles = @($installedFiles)
-    if ($prevInst) { $allFiles += @(Get-MapValue $prevInst 'Files' | Where-Object { $_ }) }
-    Set-MapValue $bk 'Install' ([ordered]@{
-        TargetDir  = $TargetDir
-        CreatedDir = $createdDir
-        Files      = @($allFiles | Sort-Object -Unique)
-    })
-    Write-BackupFile $bk
 
     if ($script:UsedAltName) {
         Write-Host ''

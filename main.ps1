@@ -353,6 +353,14 @@ trap {
     } else {
         Write-Host '!! 尚未做任何修改。' -ForegroundColor Red
     }
+    # 复制文件时为了腾开句柄停掉的字体缓存服务，中断了也得拉回来：收尾那次
+    # Restart-FontCache 已经轮不到了，不管的话会一直停到下次重启。
+    foreach ($svc in $script:StoppedServices) {
+        try {
+            Start-Service -Name $svc -ErrorAction Stop
+            Write-Host "!! 已重新启动服务 $svc（复制文件时被我们停掉的）" -ForegroundColor DarkYellow
+        } catch { }
+    }
     break
 }
 
@@ -439,7 +447,9 @@ try {
     $perUser = @()
     foreach ($hive in (Get-ChildItem 'Registry::HKEY_USERS' -ErrorAction SilentlyContinue)) {
         $sid = Split-Path $hive.Name -Leaf
-        if ($sid -notlike 'S-1-5-21-*' -or $sid -like '*_Classes') { continue }
+        # 本地 / 域账户 S-1-5-21-*，Entra ID 账户 S-1-12-1-*，同 Get-MetricsTargets
+        if (($sid -notlike 'S-1-5-21-*' -and $sid -notlike 'S-1-12-1-*') -or
+            $sid -like '*_Classes') { continue }
         $k = "Registry::HKEY_USERS\$sid\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
         $names = Get-RegValueNames $k
         if ($names.Count -eq 0) { continue }

@@ -366,13 +366,13 @@ def synthesize(src, real, shape):
                 log("[合成] varLib 合成完成 (%.0fs)，%s 轴 %g..%g"
                     % (time.time() - t, shape.wss_tag, span[0], span[1]))
                 if span != (lo, hi):
-                    # master 的跨度和真 SegUIVar 的 300..700 对不上时按它重定基，
-                    # STAT 里那几档字重才落在轴上。
-                    font = instancer.instantiateVariableFont(
-                        font, {"wght": (lo, dflt, hi)}, inplace=True,
-                        optimize=False, updateFontNames=False)
-                    log("[合成] %s 轴重定基到 %g/%g/%g"
-                        % (shape.wss_tag, lo, dflt, hi))
+                    # master 盖不住真 SegUIVar 的整个范围，轴就只能停在 span 上：
+                    # instancer 只会收窄轴、不会拓宽，范围外的限值会被它悄悄夹回
+                    # fvar 原来的范围。轴外那几档的命名实例和 STAT 值由
+                    # rebuild_instances / rebuild_stat 丢掉。
+                    log("[合成] master 只覆盖 %s %g..%g（真 %s 是 %g..%g），"
+                        "轴外的那几档不建"
+                        % (shape.wss_tag, span[0], span[1], REAL, lo, hi))
                 for f in fonts.values():
                     if f is not font:
                         f.close()
@@ -628,7 +628,7 @@ def rebuild_axes(font, shape, names):
 
 
 def rebuild_instances(font, shape, names, tags):
-    """照真 SegUIVar 的命名实例重建，落在我们没有的轴上的那些丢掉。
+    """照真 SegUIVar 的命名实例重建，落在我们没有的轴上、或者轴外的那些丢掉。
 
     没有 wght 轴时 15 个实例只剩 3 个（Regular Small / Regular / Regular
     Display）—— 那才是实情：这个文件只有一档字重。多报几档出来，
@@ -639,9 +639,15 @@ def rebuild_instances(font, shape, names, tags):
     fvar.instances = []
     kept = []
     defaults = {a[0]: a[2] for a in shape.axes}
+    ranges = {a.axisTag: (a.minValue, a.maxValue) for a in fvar.axes}
     for coords, subfamily, ps_name in shape.instances:
         # 落在我们没有的那根轴上、坐标又不是它默认值的实例，给不出这一档
         if any(t not in tags and v != defaults[t] for t, v in coords.items()):
+            continue
+        # 落在轴外的同样给不出（合成时 master 盖不住真 SegUIVar 的范围，或者
+        # 源 VF 的轴本来就窄）。报出来会被夹到轴端点去画，理由同上。
+        if any(t in ranges and not ranges[t][0] <= v <= ranges[t][1]
+               for t, v in coords.items()):
             continue
         inst = NamedInstance()
         inst.subfamilyNameID = names.id_for(subfamily)
@@ -660,13 +666,17 @@ def rebuild_stat(font, shape, names, tags):
     """重建 STAT —— 家族怎么拆全靠它。"""
     if "STAT" in font:
         del font["STAT"]
+    ranges = {a.axisTag: (a.minValue, a.maxValue) for a in font["fvar"].axes}
     axes = []
     for tag, ordering, axis_name in shape.stat_axes:
         if tag not in tags:
             # 这根轴我们没有。整条轴连同它的档一起丢掉 —— 留着的话
             # DirectWrite 会照它报出并不存在的字重档。
             continue
-        vals = shape.stat_values.get(tag, [])
+        # 轴外的档同理，和 rebuild_instances 一个口径
+        lo, hi = ranges[tag]
+        vals = [v for v in shape.stat_values.get(tag, [])
+                if lo <= v.get("value", v.get("nominalValue")) <= hi]
         axes.append(dict(tag=tag, name=names.id_for(axis_name),
                          ordering=ordering,
                          values=[dict(v, name=names.id_for(v["name"]))

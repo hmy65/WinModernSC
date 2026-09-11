@@ -595,11 +595,22 @@ def _extend_hvar(font, order, n_old, added, mark_glyph, base_of):
                   变；挂全零行的话 e 变粗了 é 却没变宽，间距就错了。
       搬过来的 -> 挂全零行。它们没有 gvar 增量、字形根本不随字重变，字宽跟着
                   变反而不对。
+
+    VVAR（纵排的字高 / 原点）是同一回事，漏不得：静态字重合成 VF 时，master
+    带 vmtx 就会被 varLib 建出 VVAR，中文字体几乎都带。两张表里字宽 / 字高之外
+    的映射（LsbMap、VOrgMap 之类）只要在，也得把新字形补上 —— fontTools 编译
+    时按字形表逐个去查，缺一个就是 KeyError，整趟白跑。
     """
-    if "HVAR" not in font:
-        return
-    hvar = font["HVAR"].table
-    vs = hvar.VarStore
+    for tag, attrs in (("HVAR", ("AdvWidthMap", "LsbMap", "RsbMap")),
+                       ("VVAR", ("AdvHeightMap", "TsbMap", "BsbMap", "VOrgMap"))):
+        if tag in font:
+            _extend_var_maps(font[tag].table, tag, attrs, order, n_old,
+                             added, mark_glyph, base_of)
+
+
+def _extend_var_maps(table, tag, attrs, order, n_old, added, mark_glyph, base_of):
+    """_extend_hvar 的一张表。attrs[0] 是字宽 / 字高那张，只有它可以是隐式的。"""
+    vs = table.VarStore
 
     zero = None
     for outer, vd in enumerate(vs.VarData):
@@ -615,21 +626,26 @@ def _extend_hvar(font, order, n_old, added, mark_glyph, base_of):
         vd.ItemCount = len(vd.Item)
         zero = (0 << 16) | (vd.ItemCount - 1)
 
-    if hvar.AdvWidthMap is None:
-        # 隐式 1:1 映射：字形 i 用第 i 条。新字形排在后面就越界了，所以改成
-        # 显式表 —— 老字形逐个映到自己原来那条，新字形才好单独指。
-        from fontTools.ttLib.tables import otTables as ot
-        m = ot.VarIdxMap()
-        m.mapping = {}
-        for i, gname in enumerate(order):
-            m.mapping[gname] = i if i < n_old else zero
-        hvar.AdvWidthMap = m
-        log("      note: HVAR 原本是隐式映射，已改成显式表（%d 条）" % len(m.mapping))
-
-    mapping = hvar.AdvWidthMap.mapping
     new_names = set(added.values()) | {g for g in mark_glyph.values() if g}
-    for gname in new_names:
-        if gname in mapping and gname not in base_of:
-            continue                     # 源字体自己的组合符号，别动它
-        base = base_of.get(gname)
-        mapping[gname] = mapping.get(base, zero) if base else zero
+    for n, attr in enumerate(attrs):
+        m = getattr(table, attr, None)
+        if m is None:
+            if n:
+                continue                 # 其余几张没有就是「这一项不随轴变」
+            # 隐式 1:1 映射：字形 i 用第 i 条。新字形排在后面就越界了，所以改成
+            # 显式表 —— 老字形逐个映到自己原来那条，新字形才好单独指。
+            from fontTools.ttLib.tables import otTables as ot
+            m = ot.VarIdxMap()
+            m.mapping = {}
+            for i, gname in enumerate(order):
+                m.mapping[gname] = i if i < n_old else zero
+            setattr(table, attr, m)
+            log("      note: %s 原本是隐式映射，已改成显式表（%d 条）"
+                % (tag, len(m.mapping)))
+
+        mapping = m.mapping
+        for gname in new_names:
+            if gname in mapping and gname not in base_of:
+                continue                 # 源字体自己的组合符号，别动它
+            base = base_of.get(gname)
+            mapping[gname] = mapping.get(base, zero) if base else zero
