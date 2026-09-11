@@ -2,11 +2,13 @@
 # -*- coding: utf-8 -*-
 """make_cjk.py 和 make_segoe_ui.py 的公共部分。"""
 
+import argparse
 import math
 import os
 import re
 import shutil
 import tempfile
+from collections import namedtuple
 
 from fontTools.misc.roundTools import otRound
 from fontTools.ttLib import TTFont, TTCollection, newTable
@@ -38,6 +40,8 @@ MAC = (1, 0, 0)
 IDENTITY_NAME_IDS = (1, 2, 4, 6, 16, 17, 18, 21, 22)
 # 版本、版权、许可、厂商：保留源字体自己的，不动。
 SOURCE_NAME_IDS = (0, 5, 7, 8, 9, 11, 13, 14)
+PANOSE_FIELDS = ("bFamilyType", "bSerifStyle", "bWeight", "bProportion", "bContrast",
+                 "bStrokeVariation", "bArmStyle", "bLetterForm", "bMidline", "bXHeight")
 
 LOCAL_NOTE = ("Repackaged locally by WinModernSC for system font substitution. "
               "Outlines, copyright and license belong to the source font, "
@@ -204,7 +208,7 @@ def scan_source(srcdir=None):
         kind = VF
     else:
         kind = STATIC
-    # 并存时静态那半照样得齐 —— 12 个 Segoe UI 和 8 个中文族仍然从静态那半
+    # 并存时静态那半照样得齐 —— 12 个 Segoe UI 和 9 个中文族仍然从静态那半
     # 派生（BOTH 走的就是 STATIC 那条路），少一档就少一档。
     if kind in (STATIC, BOTH):
         check_required(styles, srcdir, family, kind)
@@ -348,8 +352,9 @@ class VFInstances(object):
     """一个 VF 源在一次运行里的静态实例缓存。
 
     实例化一次几十 MB 的可变字体要几十秒，而 12 个 Segoe UI 输出里好几个共用
-    同一档字重（Regular 和 Italic 都是 400，Semibold 和 SemiboldItalic 都是
-    600 …）—— 按 (字重, 斜不斜) 缓存，每档只切一次。
+    同一档字重（Regular 和 Italic 都是 400 —— 或者 --regular-weight 给的那个
+    值，Semibold 和 SemiboldItalic 都是 600 …）—— 按 (字重, 斜不斜) 缓存，每档
+    只切一次。
 
     中间文件落在临时目录，close() 一起删。【不能】往产物目录里放：
     verify_fonts.stray_files() 会把产物目录里的陌生字体文件当成旧产物报错。
@@ -416,6 +421,94 @@ class VFInstances(object):
         self._cache = {}
 
 
+# ------------------------------------------------------------ Regular 调粗
+# 身份字重是 400 的那一档就是 Regular。有些字体的 Regular 在 Windows 界面字号下
+# 偏细，--regular-weight N 让这一档的【轮廓】改在 wght N 上切，身份照抄的
+# usWeightClass 仍是 400 —— 系统眼里它还是 Regular，别的档一个都不动。
+#
+# 范围 400–500：只往粗了调；上限离 Semibold 的 600 还差一整档，字重顺序怎么都
+# 倒不过来。三个生成脚本各跑各的，漏给一个就是「拉丁 450、中文 400」，所以产物
+# 里要记一笔（见 clone_identity），verify_fonts 拿它把三处比一遍。
+REGULAR = 400
+REGULAR_WEIGHT_RANGE = (400, 500)
+# 记在 nameID 10 末尾的那一笔，read_regular_weight() 按它读回来
+REGULAR_WEIGHT_NOTE = "Built with regular-weight=%d."
+_REGULAR_WEIGHT_RE = re.compile(r"regular-weight=(\d+)")
+
+
+def _regular_weight_type(s):
+    try:
+        v = int(s)
+    except ValueError:
+        raise argparse.ArgumentTypeError("要一个整数，比如 450，给的是 %r" % s)
+    lo, hi = REGULAR_WEIGHT_RANGE
+    if not lo <= v <= hi:
+        raise argparse.ArgumentTypeError("只能在 %d–%d 之间，给的是 %d" % (lo, hi, v))
+    return v
+
+
+def parse_args(description):
+    """三个生成脚本共用的命令行，目前只有 --regular-weight 这一个参数。"""
+    lo, hi = REGULAR_WEIGHT_RANGE
+    ap = argparse.ArgumentParser(description=description)
+    ap.add_argument(
+        "--regular-weight", type=_regular_weight_type, metavar="N",
+        help="Regular 那一档改在 wght N 上切（%d–%d，默认 %d），其余字重不动。"
+             "只在源是单个可变字体时可用，三个生成脚本要给同一个值。"
+             % (lo, hi, REGULAR))
+    return ap.parse_args()
+
+
+def resolve_regular_weight(src, value):
+    """校验 --regular-weight，返回要切的字重；没给、或者给的就是 400，返回 None。
+
+    只认纯 VF 源。静态字重之间插不出 450 这种中间档，只能在现成的几档里挑；
+    BOTH 那种摆法 12 个 Segoe UI 和中文族走的是静态文件，为了 Regular 一档改用
+    VF 实例，最常用的这一档反而丢了静态文件自带的 hinting。
+
+    VF 的 wght 范围盖不住就报错，【不夹】：weight_coord() 对普通档位是夹到端点
+    接着跑，那是「这个源能给出的最接近的一档」；这里却是明确点名要 N，夹了就
+    等于没生效。
+    """
+    if value is None:
+        return None
+    if src.kind != VF:
+        raise SystemExit(
+            "--regular-weight 只在源是单个可变字体（<Family>-%s.ttf）时可用，"
+            "当前源类型是 %s（%s）。\n"
+            "静态字重之间插不出中间档，只能在现成的几档里挑。"
+            % (VF_STYLE, src.kind, KIND_DESC[src.kind]))
+    with TTFont(src.vf, lazy=True) as f:
+        a = fvar_axis(f, "wght")
+        if a is None:
+            raise SystemExit("%s 没有 wght 轴，--regular-weight 无从切起。"
+                             % os.path.basename(src.vf))
+        if not a.minValue <= value <= a.maxValue:
+            raise SystemExit("%s 的 wght 只有 %g..%g，切不到 --regular-weight %d。"
+                             % (os.path.basename(src.vf), a.minValue, a.maxValue,
+                                value))
+    return None if value == REGULAR else value
+
+
+def outline_weight(identity, regular_weight):
+    """一个输出去 VF 上切哪一档。
+
+    照身份切（被冒充字体的 usWeightClass），唯一的例外是 Regular（400）那一档：
+    给了 --regular-weight 就改切在它上面。Segoe UI 的 Regular 和 Italic、雅黑 /
+    宋体 / 黑体 / 等线的常规档身份都是 400，一起跟着走；别的档一个都不动。
+    """
+    if regular_weight and identity == REGULAR:
+        return regular_weight
+    return identity
+
+
+def read_regular_weight(font):
+    """产物是用哪个 --regular-weight 生成的。没记就是没给，也就是 400。"""
+    r = font["name"].getName(10, *WIN)
+    m = _REGULAR_WEIGHT_RE.search(r.toUnicode()) if r else None
+    return int(m.group(1)) if m else REGULAR
+
+
 # ------------------------------------------------------------- 系统字体
 def open_system_font(name, index=None, lazy=False):
     """打开 C:\\Windows\\Fonts 里的一个字体，ttc 按索引取 face。"""
@@ -430,7 +523,8 @@ def system_font_weight(name, index=None):
 
     这样就不必另立一张「输出 -> 字重」的对照表：clone_identity() 本来就把
     这个值原样抄进产物，轮廓跟着身份走，两边永远对得上；系统换了版本、某一档
-    的 usWeightClass 变了，也是自动跟着变。
+    的 usWeightClass 变了，也是自动跟着变。唯一的例外是 --regular-weight 调粗
+    的 Regular 那一档，见 outline_weight()。
     """
     f = open_system_font(name, index, lazy=True)
     try:
@@ -440,20 +534,106 @@ def system_font_weight(name, index=None):
 
 
 def require_system_fonts(names):
-    """系统里缺了要照抄身份的字体就报错退出。"""
-    missing = sorted({n for n in names
+    """系统里缺了要照抄身份的字体就报错退出。names 里可以混着 Derived。"""
+    files = []
+    for n in names:
+        files += [n.base, n.names_from] if isinstance(n, Derived) else [n]
+    missing = sorted({n for n in files
                       if not os.path.exists(os.path.join(WINFONTS, n))})
     if missing:
         raise SystemExit("系统里找不到这些字体，无法照抄身份: %s\n目录: %s"
                          % (", ".join(missing), WINFONTS))
 
 
+# ---------------------------------------------------------- 派生的身份
+# 系统里【没有】、要照着真字体派生出来的一个被冒充者。目前只有雅黑 Semibold
+# 这一档（见 make_cjk.YAHEI_SEMIBOLD）。
+#
+#   base          字形和覆盖面借它的：补字的「补哪些」和第一顺位捐赠源都是它，
+#                 所以挑字重最近的那档，补进来的符号才不会比正文细一截
+#   names_from    身份结构借它的：name 表、fsSelection、macStyle 整段照抄
+#   style_from    names_from 身份字符串里的样式词，换成 style_to
+#   weight        usWeightClass
+#   panose_weight PANOSE 的 bWeight
+_Derived = namedtuple("Derived", "base names_from style_from style_to "
+                                 "weight panose_weight")
+
+
+class Derived(_Derived):
+    __slots__ = ()
+
+    def __str__(self):
+        # make_cjk 的施工表按「冒充谁」打一列，这里给出能看懂的一格
+        return "%s(%s->%s)" % (self.names_from, self.style_from, self.style_to)
+
+
+def open_identity(spec, index=None, lazy=False):
+    """打开一个被冒充者。spec 是系统字体文件名，或者 Derived。
+
+    Derived 的那份只活在内存里，不落盘：字形是 base 的，身份字段照
+    names_from 抄过来再换掉样式词和字重。clone_identity / patch_glyphs /
+    verify_fonts 拿到它跟拿到一个真系统字体没有区别，下游一行都不用为
+    派生身份分支。
+    """
+    if not isinstance(spec, Derived):
+        return open_system_font(spec, index, lazy)
+    font = open_system_font(spec.base, index, lazy)
+    tmpl = open_system_font(spec.names_from, index, lazy=True)
+    try:
+        name = font["name"]
+        name.names = [r for r in name.names if r.nameID not in IDENTITY_NAME_IDS]
+        for r in tmpl["name"].names:
+            if r.nameID not in IDENTITY_NAME_IDS:
+                continue
+            try:
+                s = r.toUnicode()
+            except Exception:
+                continue
+            name.setName(s.replace(spec.style_from, spec.style_to),
+                         r.nameID, r.platformID, r.platEncID, r.langID)
+        # 家族名里没换到样式词，派生出来的就和模板撞名 —— 两个文件都自称
+        # "Microsoft YaHei Light"，系统只认得其中一个。宁可在这里停下。
+        fam = name.getName(1, *WIN)
+        if fam is None or spec.style_to not in fam.toUnicode():
+            raise SystemExit("%s face%s 的家族名里没有 %r，派生不出 %s 那一档"
+                             % (spec.names_from, index, spec.style_from,
+                                spec.style_to))
+
+        os2, tos2 = font["OS/2"], tmpl["OS/2"]
+        os2.usWeightClass = spec.weight
+        os2.usWidthClass = tos2.usWidthClass
+        os2.fsSelection = tos2.fsSelection
+        for f in PANOSE_FIELDS:
+            setattr(os2.panose, f, getattr(tos2.panose, f))
+        os2.panose.bWeight = spec.panose_weight
+        font["head"].macStyle = tmpl["head"].macStyle
+    finally:
+        tmpl.close()
+    return font
+
+
+def identity_weight(spec, index=None):
+    """被冒充者的 usWeightClass。源是 VF 时拿它当「切哪一档」。"""
+    if isinstance(spec, Derived):
+        return spec.weight
+    return system_font_weight(spec, index)
+
+
+def identity_file(spec):
+    """被冒充者的字形实际来自哪个系统文件。补字按它排除重复的捐赠源。"""
+    return spec.base if isinstance(spec, Derived) else spec
+
+
 # --------------------------------------------------------------- 改造
-def clone_identity(font, real, unique_id):
+def clone_identity(font, real, unique_id, regular_weight=None):
     """把 real 的身份字段照抄到 font 上，源字体的版权许可原样留着。
 
     含本地化族名（nameID 1 的中文那一条）—— 网页里 font-family: 微软雅黑
     匹配的正是它，只写英文名等于只做了一半。
+
+    regular_weight 是 --regular-weight 的值，给了就在 nameID 10 末尾记一笔。
+    轮廓切在哪一档，文件里本来没有任何字段反映 —— usWeightClass 是照抄的身份，
+    不跟着轮廓走 —— 不记下来，三个脚本给的值对不对得上就没法查。
     """
     name = font["name"]
     name.names = [r for r in name.names if r.nameID in SOURCE_NAME_IDS]
@@ -465,7 +645,10 @@ def clone_identity(font, real, unique_id):
         except Exception:
             continue
         name.setName(s, r.nameID, r.platformID, r.platEncID, r.langID)
-    for nid, s in ((3, unique_id), (10, LOCAL_NOTE)):
+    note = LOCAL_NOTE
+    if regular_weight:
+        note += " " + REGULAR_WEIGHT_NOTE % regular_weight
+    for nid, s in ((3, unique_id), (10, note)):
         name.setName(s, nid, *MAC)
         name.setName(s, nid, *WIN)
 
@@ -477,8 +660,7 @@ def clone_identity(font, real, unique_id):
     if os2.version < 4:
         fs &= ~0x0380
     os2.fsSelection = fs
-    for f in ("bFamilyType", "bSerifStyle", "bWeight", "bProportion", "bContrast",
-              "bStrokeVariation", "bArmStyle", "bLetterForm", "bMidline", "bXHeight"):
+    for f in PANOSE_FIELDS:
         setattr(os2.panose, f, getattr(ros2.panose, f))
     font["head"].macStyle = real["head"].macStyle
 

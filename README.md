@@ -10,10 +10,10 @@ family of your choice.
 
 It works in two stages. Three Python scripts read the fonts in `source\` and generate three
 sets of font files: a 12-file static `Segoe UI` family (Latin only), the single variable
-font `Segoe UI Variable` that the Windows 11 shell actually uses, and 8 files that stand in
-for the Windows Chinese families (Microsoft YaHei / SimSun / SimHei / DengXian) — 21 files
-in all. A PowerShell script then wires those files into four registry mechanisms and backs
-up every value it touches first.
+font `Segoe UI Variable` that the Windows 11 shell actually uses, and 9 Chinese family files
+(standing in for Microsoft YaHei / SimSun / SimHei / DengXian, plus a Microsoft YaHei
+Semibold that Windows itself does not ship) — 22 files in all. A PowerShell script then
+wires those files into four registry mechanisms and backs up every value it touches first.
 
 **Recommended source: [SarasaGothicSC-TTF](https://github.com/be5invis/Sarasa-Gothic/releases)**
 — the TTF release package, not the `-Unhinted` one. This is the combination this project
@@ -36,9 +36,9 @@ mechanism under `src\`.
 
 | # | What it does | Defined in |
 | --- | --- | --- |
-| **1** | Repoints the `Fonts` registry key at the 21 generated files (12 static `Segoe UI`, 1 `Segoe UI Variable`, 8 Chinese families); GDI and DirectWrite both read the family name out of the font file itself, so the shell, UWP/WinUI, browsers and Office all follow. | [`src/main_fonts.ps1`](src/main_fonts.ps1) |
+| **1** | Repoints the `Fonts` registry key at the 22 generated files (12 static `Segoe UI`, 1 `Segoe UI Variable`, 9 Chinese families); GDI and DirectWrite both read the family name out of the font file itself, so the shell, UWP/WinUI, browsers and Office all follow. | [`src/main_fonts.ps1`](src/main_fonts.ps1) |
 | **2** | Writes `FontSubstitutes` entries pointing the old family names `Tahoma`, `MS Shell Dlg` and `MS Sans Serif` at `Segoe UI`, to catch legacy Win32 programs still asking for them. | [`src/main_font_substitutes.ps1`](src/main_font_substitutes.ps1) |
-| **3** | Writes the six `WindowMetrics` LOGFONTs (caption, small caption, menu, dialog, status bar, icon label) plus caption height and border width — this is the only layer that can change the point size. | [`src/main_window_metrics.ps1`](src/main_window_metrics.ps1) |
+| **3** | Writes the six `WindowMetrics` LOGFONTs (caption, small caption, menu, dialog, status bar, icon label) plus caption height and border width — this is the only layer that can change the point size. Size and weight are set with the two `-window-metrics-*` options. | [`src/main_window_metrics.ps1`](src/main_window_metrics.ps1) |
 | **4** | Prepends two lines to `FontLink\SystemLink` for every `Segoe UI` family, so GDI's Han fallback resolves through the files mechanism 1 installed instead of the stock font in `%windir%\Fonts`. Each family gets the matching weight, and the rest of the existing chain is kept as-is. | [`src/main_font_link.ps1`](src/main_font_link.ps1) |
 
 Undoing all four is handled by [`src/main_revert.ps1`](src/main_revert.ps1), driven from the
@@ -137,7 +137,7 @@ matching upright.
 - **Python 3.8+** with fontTools: `pip install fonttools`
 - **PowerShell as Administrator** — Windows PowerShell 5.1 or PowerShell 7 both work.
   `-DryRun` is the only mode that runs without elevation.
-- **About 205 MB free on `C:`** for the generated fonts (the CJK files are the bulk of it).
+- **About 230 MB free on `C:`** for the generated fonts (the CJK files are the bulk of it).
   With a variable source, `SegoeUI-Variable.ttf` carries the whole source font, so add tens
   of MB on top.
 
@@ -166,9 +166,9 @@ decided on, and all three generators branch on it:
 
 | Kind | What is in `source\` | How the three scripts run |
 | --- | --- | --- |
-| `STATIC` | A set of static weights: at least `Regular` + `Light`, plus `Bold` or `Black` | The 12 `Segoe UI` files and the 8 Chinese ones each pick a static weight; `Segoe UI Variable` is synthesized from the static weights |
+| `STATIC` | A set of static weights: at least `Regular` + `Light`, plus `Bold` or `Black` | The 12 `Segoe UI` files and the 9 Chinese ones each pick a static weight; `Segoe UI Variable` is synthesized from the static weights |
 | `VF` | A single `<Family>-VF.ttf` | All three sets are instantiated from that variable font; `Segoe UI Variable` is converted from it directly, not synthesized |
-| `BOTH` | `<Family>-VF.ttf` plus static files satisfying the `STATIC` rule | The 12 `Segoe UI` files and the 8 Chinese ones still take the static path (the designer's own static cuts beat interpolated ones); `Segoe UI Variable` uses the supplied VF |
+| `BOTH` | `<Family>-VF.ttf` plus static files satisfying the `STATIC` rule | The 12 `Segoe UI` files and the 9 Chinese ones still take the static path (the designer's own static cuts beat interpolated ones); `Segoe UI Variable` uses the supplied VF |
 
 - For `STATIC` and `BOTH`, missing any required weight is a hard error that names the exact
   files it could not find.
@@ -200,14 +200,20 @@ python src\make_cjk.py
 
 The first writes `SegoeUI-Variable.ttf` to `SegoeUIMod\` (about 0.4 MB from a static source;
 from a variable source the whole source comes along, so tens of MB), the second writes the 12
-static files to the same directory (about 4 MB), the third writes 8 files to `CJKMod\` (about
-200 MB). All three print which source weight each output was built from before they start;
+static files to the same directory (about 4 MB), the third writes 9 files to `CJKMod\` (about
+225 MB). All three print which source weight each output was built from before they start;
 `make_vf.py` also prints the source kind, whether it synthesized or converted, and the
 measured interpolation compatibility.
 
 The three are order-independent and write their own outputs (`make_vf.py` and
 `make_segoe_ui.py` share `SegoeUIMod\`, but the filenames do not overlap and each side's
 self-check knows the other's output is not a stale leftover).
+
+**A thin Regular can be made a little heavier.** Some fonts look thin at Regular at Windows
+UI sizes. When the source is a single variable font, add the same `--regular-weight`
+(400–500, default 400) to all three scripts: the Regular weight is built at that weight
+instead, Windows still treats it as Regular, and the other weights stay as they are. If the
+three scripts get different values, the self-check reports it.
 
 **Missing glyphs are filled in automatically.** Accented letters, punctuation and symbols
 that the replaced Windows font has but the source lacks get added to the output, so they
@@ -258,16 +264,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\main.ps1 -revert
 | `-no-font-substitutes` | Skip mechanism 2. Legacy Win32 programs asking for `Tahoma` / `MS Shell Dlg` / `MS Sans Serif` keep their old font; nothing else is affected. |
 | `-no-window-metrics` | Skip mechanism 3. Title bars, menus, dialogs and status bars keep their current font **and size**, because those controls never read the `Fonts` key that mechanism 1 changes. |
 | `-no-font-link` | Skip mechanism 4. If mechanism 1 did run, GDI programs fall back to the stock Microsoft YaHei for Han while DirectWrite uses the new font, so two different Han fonts end up on screen at once (harmless if you also passed `-no-fonts`). |
+| `-window-metrics-size` | Point size for the classic UI (mechanism 3). Default 9. |
+| `-window-metrics-weight` | Weight for the classic UI: `Light` / `Semilight` / `Regular` / `Semibold` / `Bold` / `Black`. Default `Regular`. |
 | `-DryRun` | Print the plan and change nothing. Combines with `-install` or `-revert`. |
 
 The four `-no-*` switches combine freely. `-install` and `-revert` are mutually exclusive.
+The two `-window-metrics-*` options only go with `-install` and cannot be combined with
+`-no-window-metrics`.
 Running `main.ps1` with no arguments prints this list.
 
 ### What gets changed
 
 | Mechanism | Location |
 | --- | --- |
-| 1 | `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts` (21 values), font files in `C:\Fonts` |
+| 1 | `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts` (22 values), font files in `C:\Fonts` |
 | 2 | `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes` (8 values) |
 | 3 | `<each user>\Control Panel\Desktop\WindowMetrics` (6 LOGFONTs + 2 scalars) |
 | 4 | `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink` (up to 20 values) |

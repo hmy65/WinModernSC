@@ -29,14 +29,25 @@
 # 加 TTC 里 face1 的全名。三件事都要对：
 #   · 字重要对上。Segoe UI Light 是独立 GDI 家族（tmWeight=300），它自己那条链
 #     确实被查，原链挂的是 MSYHL；塞 Regular 进去就成了细拉丁配常规粗细的中文。
-#   · Semilight / Semibold 原链本来就用 Regular 档（雅黑没这两档），照抄，
-#     不自作主张。
+#   · Semilight 原链用 Regular 档（雅黑没这一档），照抄，不自作主张。
+#   · Semibold 原链也是 Regular 档，但这里【不】照抄，挂 make_cjk.py 派生的那档
+#     雅黑 Semibold。Win11 26200 实测（ClearType 渲染比对点阵）：
+#     "Segoe UI Semibold" 的 lfWeight 从 400 写到 700，拉丁都是真 Semibold，
+#     中文却和 "Segoe UI" 400 逐像素相同 —— GDI 不给回退来的中文合成加粗。
+#     照抄的话经典界面选 -window-metrics-weight Semibold 就只加粗了拉丁。
 #   · face 名用 "Microsoft YaHei UI" 系列 —— 全表其它链都这么写，那也正是我们
 #     TTC 里 face1 的 nameID 4。
 #   · Segoe UI Black 系统压根没给链（全表 83 个值名里没有 Black），Windows 自己
 #     的默认回退把它落到【原版】SIMSUN.TTC（点阵和 SimSun 直接渲染逐字节相同），
 #     正是机制 1 绕不过去的那种。这里给它挂 Bold 档：Black 是 900，配常规粗细
 #     的中文明显偏细。
+#
+# ScaleFrom：缩放后缀从原链里哪个 face 的那一行抄，缺省就是 Face 自己。只有
+# Semibold 用得上 —— 原链里没有 "Microsoft YaHei UI Semibold"，被顶掉的是
+# Regular 那一行，后缀照它抄（见 Get-LinkScaleSuffix）。
+$YaHeiSemibold = @{ Reg       = 'Microsoft YaHei Semibold & Microsoft YaHei UI Semibold (TrueType)'
+                    Face      = 'Microsoft YaHei UI Semibold'
+                    ScaleFrom = 'Microsoft YaHei UI' }
 $LinkFaces = [ordered]@{
     'Segoe UI'           = @{ Reg  = 'Microsoft YaHei & Microsoft YaHei UI (TrueType)'
                               Face = 'Microsoft YaHei UI' }
@@ -44,8 +55,7 @@ $LinkFaces = [ordered]@{
                               Face = 'Microsoft YaHei UI Light' }
     'Segoe UI Semilight' = @{ Reg  = 'Microsoft YaHei & Microsoft YaHei UI (TrueType)'
                               Face = 'Microsoft YaHei UI' }
-    'Segoe UI Semibold'  = @{ Reg  = 'Microsoft YaHei & Microsoft YaHei UI (TrueType)'
-                              Face = 'Microsoft YaHei UI' }
+    'Segoe UI Semibold'  = $YaHeiSemibold
     'Segoe UI Black'     = @{ Reg  = 'Microsoft YaHei Bold & Microsoft YaHei UI Bold (TrueType)'
                               Face = 'Microsoft YaHei UI Bold' }
 }
@@ -62,10 +72,12 @@ $LinkFaces = [ordered]@{
 # 拿它显示中文全靠这张表。源本身是可变字体时产物带汉字，走不到这几行，插了也
 # 只是多几行不生效的，没有代价。
 #
-# 挂哪一档【照抄原链】，和静态那 5 个族的规矩一致（实测每一条都对得上）：
-#     无后缀 / Semilight / Semibold -> MSYH.TTC   Microsoft YaHei UI
-#     Light                         -> MSYHL.TTC  Microsoft YaHei UI Light
-#     Bold                          -> MSYHBD.TTC Microsoft YaHei UI Bold
+# 挂哪一档和静态那 5 个族的规矩一致：照抄原链（实测每一条都对得上），
+# Semibold 例外，理由同上：
+#     无后缀 / Semilight -> MSYH.TTC   Microsoft YaHei UI
+#     Light              -> MSYHL.TTC  Microsoft YaHei UI Light
+#     Bold               -> MSYHBD.TTC Microsoft YaHei UI Bold
+#     Semibold           -> 派生的雅黑 Semibold（原链是 MSYH.TTC）
 # 缩放后缀不写死，Get-LinkScaleSuffix 按 face 名从原链里抄（这 15 条原链的
 # 雅黑行全都带 ,128,96，抄出来就是它）。
 $VarWeightCuts = [ordered]@{
@@ -75,8 +87,7 @@ $VarWeightCuts = [ordered]@{
                      Face = 'Microsoft YaHei UI Light' }
     'Semilight' = @{ Reg  = 'Microsoft YaHei & Microsoft YaHei UI (TrueType)'
                      Face = 'Microsoft YaHei UI' }
-    'Semibold'  = @{ Reg  = 'Microsoft YaHei & Microsoft YaHei UI (TrueType)'
-                     Face = 'Microsoft YaHei UI' }
+    'Semibold'  = $YaHeiSemibold
     'Bold'      = @{ Reg  = 'Microsoft YaHei Bold & Microsoft YaHei UI Bold (TrueType)'
                      Face = 'Microsoft YaHei UI Bold' }
 }
@@ -100,7 +111,8 @@ foreach ($size in @('Small', 'Text', 'Display')) {
     foreach ($cut in $VarWeightCuts.Keys) {
         $full = ('Segoe UI Variable {0} {1}' -f $size, $cut).Trim()
         $spec = $VarWeightCuts[$cut]
-        $LinkFaces[(Get-GdiFaceName $full)] = @{ Reg = $spec.Reg; Face = $spec.Face }
+        $LinkFaces[(Get-GdiFaceName $full)] = @{ Reg = $spec.Reg; Face = $spec.Face
+                                                 ScaleFrom = $spec.ScaleFrom }
     }
 }
 
@@ -172,7 +184,7 @@ function Get-CjkLinkTargets([string]$Face, [string[]]$Existing) {
     if ($file -and (Test-OurFontFile $file)) {
         # 缩放后缀只从【原链】里抄，不看我们上一趟写的 —— 否则抄错一次就会
         # 自我延续，而且从旧版本（不写后缀）升上来时也补不回去。
-        $suffix = Get-LinkScaleSuffix $stock $spec.Face
+        $suffix = Get-LinkScaleSuffix $stock $(if ($spec.ScaleFrom) { $spec.ScaleFrom } else { $spec.Face })
         # Segoe UI Black 本来就没这个值，没得抄。全表 83 个值名里，Segoe UI
         # 各档挂 Microsoft YaHei UI 各档用的都是 128,96，无一例外，照这个给它
         # —— 唯一的一条反而不开缩放说不过去。

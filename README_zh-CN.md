@@ -9,8 +9,9 @@ WinModernSC 把 Windows 的界面字体整机换掉 —— 外壳、老式 Win32
 
 分两步走。三个 Python 脚本读 `source\` 里的字体，生成三组文件：12 个文件的 `Segoe UI`
 家族（静态，只管拉丁）、1 个 Windows 11 外壳在用的可变字体 `Segoe UI Variable`，以及
-8 个顶替 Windows 中文族（微软雅黑 / 宋体 / 黑体 / 等线）的文件，一共 21 个。然后一个
-PowerShell 脚本把这些文件接到四套注册表机制上，动手之前先把每一个会被改的值备份下来。
+9 个中文族文件（顶替微软雅黑 / 宋体 / 黑体 / 等线，外加一档 Windows 本来没有的雅黑
+Semibold），一共 22 个。然后一个 PowerShell 脚本把这些文件接到四套注册表机制上，动手之前
+先把每一个会被改的值备份下来。
 
 **推荐用 [SarasaGothicSC-TTF](https://github.com/be5invis/Sarasa-Gothic/releases)** ——
 TTF 发布包，不要 `-Unhinted` 那版。这一套是本项目实测验证过、效果最好的组合：更纱黑体
@@ -29,9 +30,9 @@ TTF 发布包，不要 `-Unhinted` 那版。这一套是本项目实测验证过
 
 | # | 干什么 | 定义在哪 |
 | --- | --- | --- |
-| **1** | 把 `Fonts` 注册表键指向生成出来的那 21 个文件（12 个静态 `Segoe UI`、1 个 `Segoe UI Variable`、8 个中文族），GDI 和 DirectWrite 都是从字体文件里读族名的，所以外壳、UWP/WinUI、浏览器、Office 全跟着变。 | [`src/main_fonts.ps1`](src/main_fonts.ps1) |
+| **1** | 把 `Fonts` 注册表键指向生成出来的那 22 个文件（12 个静态 `Segoe UI`、1 个 `Segoe UI Variable`、9 个中文族），GDI 和 DirectWrite 都是从字体文件里读族名的，所以外壳、UWP/WinUI、浏览器、Office 全跟着变。 | [`src/main_fonts.ps1`](src/main_fonts.ps1) |
 | **2** | 写 `FontSubstitutes`，把 `Tahoma`、`MS Shell Dlg`、`MS Sans Serif` 这些老族名指向 `Segoe UI`，兜底那些还在请求它们的老式 Win32 程序。 | [`src/main_font_substitutes.ps1`](src/main_font_substitutes.ps1) |
-| **3** | 写 `WindowMetrics` 里那 6 个 LOGFONT（标题栏、调色板标题、菜单、对话框、状态栏、图标文字），外加标题栏高度和窗口边框 —— 这是唯一能改字号的一层。 | [`src/main_window_metrics.ps1`](src/main_window_metrics.ps1) |
+| **3** | 写 `WindowMetrics` 里那 6 个 LOGFONT（标题栏、调色板标题、菜单、对话框、状态栏、图标文字），外加标题栏高度和窗口边框 —— 这是唯一能改字号的一层。字号和字重用两个 `-window-metrics-*` 参数调。 | [`src/main_window_metrics.ps1`](src/main_window_metrics.ps1) |
 | **4** | 往每个 `Segoe UI` 族的 `FontLink\SystemLink` 最前面插两条，让 GDI 的中文回退走机制 1 装的那批文件，而不是 `%windir%\Fonts` 里的原版。按字重挂对应那一档，原来的链原样接在后面。 | [`src/main_font_link.ps1`](src/main_font_link.ps1) |
 
 四套的还原统一由 [`src/main_revert.ps1`](src/main_revert.ps1) 负责，依据是各机制动手之前
@@ -113,7 +114,7 @@ MacType 是注入进程、在运行时改渲染。
 - **Python 3.8+**，装 fontTools：`pip install fonttools`
 - **管理员权限的 PowerShell** —— Windows PowerShell 5.1 和 PowerShell 7 都行。
   只有 `-DryRun` 不需要提权。
-- **`C:` 盘约 205 MB 空间**放生成的字体（大头是中文那 8 个文件）。源是可变字体时
+- **`C:` 盘约 230 MB 空间**放生成的字体（大头是中文那 9 个文件）。源是可变字体时
   `SegoeUI-Variable.ttf` 会把整个源搬过来，按源字体大小再多几十 MB。
 
 ### 1. 把源字体放进 `source\`
@@ -137,9 +138,9 @@ MacType 是注入进程、在运行时改渲染。
 
 | 源类型 | `source\` 里放什么 | 三个脚本怎么走 |
 | --- | --- | --- |
-| `STATIC` | 一组静态字重：至少 `Regular` + `Light`，外加 `Bold` 或 `Black` 之一 | 12 个 `Segoe UI` 和 8 个中文族各挑一个静态字重；`Segoe UI Variable` 由静态字重合成 |
+| `STATIC` | 一组静态字重：至少 `Regular` + `Light`，外加 `Bold` 或 `Black` 之一 | 12 个 `Segoe UI` 和 9 个中文族各挑一个静态字重；`Segoe UI Variable` 由静态字重合成 |
 | `VF` | 单独一个 `<Family>-VF.ttf` | 三组产物全部从这个可变字体实例化出来；`Segoe UI Variable` 直接改造它，不合成 |
-| `BOTH` | `<Family>-VF.ttf` 加上满足 `STATIC` 那一条的静态文件 | 12 个 `Segoe UI` 和 8 个中文族仍走静态那条路（静态字重是作者调过的，比插值出来的准）；`Segoe UI Variable` 用现成的 VF |
+| `BOTH` | `<Family>-VF.ttf` 加上满足 `STATIC` 那一条的静态文件 | 12 个 `Segoe UI` 和 9 个中文族仍走静态那条路（静态字重是作者调过的，比插值出来的准）；`Segoe UI Variable` 用现成的 VF |
 
 - `STATIC` 和 `BOTH` 缺任何一个必需字重都会直接报错退出，并明确列出缺的是哪几个文件。
 - 斜体样式可有可无。给了就原样用；不给的话，6 个斜体输出由对应的正体剪切生成。源是可变
@@ -166,11 +167,16 @@ python src\make_cjk.py
 
 第一个往 `SegoeUIMod\` 写 `SegoeUI-Variable.ttf`（源是静态字重时约 0.4 MB，源是可变字体
 时整个搬过来，几十 MB），第二个往同一个目录写 12 个静态文件（约 4 MB），第三个往
-`CJKMod\` 写 8 个文件（约 200 MB）。三个脚本开跑前都会先打一张表，说明每个输出是用哪个
+`CJKMod\` 写 9 个文件（约 225 MB）。三个脚本开跑前都会先打一张表，说明每个输出是用哪个
 源字重造的；`make_vf.py` 还会把源类型、合成还是直接改造、以及兼容率都打出来。
 
 三个脚本之间没有先后要求，各写各的目录（`make_vf.py` 和 `make_segoe_ui.py` 共用
 `SegoeUIMod\`，但文件名不重叠，两边的自检都知道对方的产物不是残留旧文件）。
+
+**Regular 偏细可以调粗一点。** 有些字体的 Regular 在 Windows 界面字号下偏细。源是单个
+可变字体时，三个脚本后面都加上同一个 `--regular-weight`（400–500，默认 400），Regular
+那一档就改用这个字重，系统仍把它当 Regular，其它字重不动。三个脚本给的值不一样，自检会
+报出来。
 
 **缺的字会自动补上。** 被顶替的那个 Windows 字体有、源字体没有的重音字母、标点和符号，
 生成时会补进产物，免得这些字回退到别的字体、和正文对不上。能拼的就用源字体自己的字母加
@@ -218,16 +224,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\main.ps1 -revert
 | `-no-font-substitutes` | 跳过机制 2。请求 `Tahoma` / `MS Shell Dlg` / `MS Sans Serif` 的老式 Win32 程序保持原来的字体，其它几层不受影响。 |
 | `-no-window-metrics` | 跳过机制 3。标题栏、菜单、对话框、状态栏的字体**和字号**都不变，因为这些控件根本不读机制 1 改的 `Fonts` 键。 |
 | `-no-font-link` | 跳过机制 4。如果机制 1 装了，GDI 程序显示中文时会回退到原版微软雅黑，而 DirectWrite 用的是新字体，同一屏上就出现两套中文（要是同时加了 `-no-fonts` 则无所谓）。 |
+| `-window-metrics-size` | 经典界面（机制 3）的字号，单位磅，默认 9。 |
+| `-window-metrics-weight` | 经典界面的字重：`Light` / `Semilight` / `Regular` / `Semibold` / `Bold` / `Black`，默认 `Regular`。 |
 | `-DryRun` | 只打印将要做的改动，什么都不改。可以和 `-install` 或 `-revert` 组合。 |
 
-4 个 `-no-*` 可以任意组合。`-install` 和 `-revert` 互斥。
+4 个 `-no-*` 可以任意组合。`-install` 和 `-revert` 互斥。两个 `-window-metrics-*` 只能配
+`-install`，也不能和 `-no-window-metrics` 一起用。
 不带任何参数跑 `main.ps1` 会把这张表打出来。
 
 ### 具体改了哪些地方
 
 | 机制 | 位置 |
 | --- | --- |
-| 1 | `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts`（21 个值），字体文件落在 `C:\Fonts` |
+| 1 | `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts`（22 个值），字体文件落在 `C:\Fonts` |
 | 2 | `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes`（8 个值） |
 | 3 | `<每个用户>\Control Panel\Desktop\WindowMetrics`（6 个 LOGFONT + 2 个标量） |
 | 4 | `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink`（最多 20 个值） |

@@ -10,10 +10,42 @@
 # 标题栏、菜单、滚动条的几何尺寸 —— 那些都在这一层。
 # 这一层是【每用户】的，所以要遍历所有用户配置单元。
 
-# 目标字体和字号。和前两套机制的目标族一致，全系统只有一个「真身」。
-$MetricsFace    = $SUB
-$MetricsSize    = 10        # 磅
-$MetricsWeight  = 400       # 400 = FW_NORMAL
+# -window-metrics-weight 的字重名 -> 写进 LOGFONT 的 (lfFaceName, lfWeight)。
+# 家族都在 "Segoe UI" 名下，和前两套机制的目标族一致，全系统只有一个「真身」。
+#
+# 换字重换的是【家族名】，不是 lfWeight。GDI 先按 lfFaceName 找家族、再在家族
+# 里挑文件，而 "Segoe UI" 这个 GDI 家族只有 Regular(400) 和 Bold(700) 两个正体
+# 文件，Light / Semilight / Semibold / Black 各自是独立的家族。Win11 26200 实测
+# （ClearType 渲染比对点阵）：
+#     "Segoe UI" + 500   和 400 逐像素相同，等于没改
+#     "Segoe UI" + 600   拿的是 Regular 再合成加粗，拉丁中文都是假粗
+#     "Segoe UI Semibold" + 400/500/600/700   四种写法逐像素相同，都是真 Semibold
+# lfWeight 写该文件真实的 usWeightClass：GDI 下写不写真值画出来一样（上面最后
+# 一条），但 GetTextMetrics 报回来的就是真值，WPF 这类单独读 lfWeight 的程序
+# （SystemFonts.MessageFontWeight）也就读得对。
+#
+# 中文走的是各家族自己那条 FontLink\SystemLink（机制 4），所以中文粗细跟着家族：
+# Light -> 雅黑 Light，Semilight / Regular -> 雅黑，Semibold -> 雅黑 Semibold
+# （make_cjk.py 派生的那档），Black -> 雅黑 Bold。Bold 例外：它和 Regular 同属
+# "Segoe UI"、共用一条链，中文是雅黑再合成加粗（见 main_font_link.ps1）。
+#
+# 斜体那 6 个不在这里：界面文字不能是斜的，Set-LogFontFields 也会把 lfItalic 清零。
+# 名字和 main.ps1 里 -window-metrics-weight 的 ValidateSet 一一对应。
+$MetricsWeights = [ordered]@{
+    Light     = @{ Face = "$SUB Light";     Weight = 300 }
+    Semilight = @{ Face = "$SUB Semilight"; Weight = 350 }
+    Regular   = @{ Face = $SUB;             Weight = 400 }
+    Semibold  = @{ Face = "$SUB Semibold";  Weight = 600 }
+    Bold      = @{ Face = $SUB;             Weight = 700 }
+    Black     = @{ Face = "$SUB Black";     Weight = 900 }
+}
+if (-not $MetricsWeights.Contains(${window-metrics-weight})) {
+    throw "字重表里没有 ${window-metrics-weight}，和 main.ps1 的 ValidateSet 对不上了。"
+}
+
+$MetricsFace    = $MetricsWeights[${window-metrics-weight}].Face
+$MetricsWeight  = $MetricsWeights[${window-metrics-weight}].Weight
+$MetricsSize    = ${window-metrics-size}   # 磅
 $MetricsCharSet = 1         # 1 = DEFAULT_CHARSET
 $MetricsQuality = 5         # 5 = CLEARTYPE_QUALITY
 
@@ -171,6 +203,35 @@ function Convert-LogFontDpi([byte[]]$b, [int]$fromDpi, [int]$toDpi) {
     return ,$out
 }
 
+# 标题栏该多高。$Original 是这个配置单元在备份里的那一项。
+#
+# 比的是【备份里的原值】，不是当前值 —— 当前值可能是上一趟我们自己写的：先
+# -window-metrics-size 14 再改回 9，按当前值比会觉得「变小了、不用动」，标题栏
+# 就停在 14pt 的高度回不来。按原值比，每次 -install 的结果只取决于原始状态和
+# 这次的参数，跟跑过几次无关。
+#   新字号比原来的大 -> Raise，Px 抬到放得下新字号，但不低于原来的高度
+#   否则             -> 还原：Raw 是原来的注册表值（$null = 原本没有这一项），
+#                       Twips 是解析出来的数（解析不了是 $null，那就别碰）
+# 原本就没有标题栏字体的配置单元（.DEFAULT、新用户模板）按 Windows 默认的 9pt 比。
+function Get-CaptionTarget($Original, [int]$NewFontPx, [int]$Dpi) {
+    $vals = Get-MapValue $Original 'Values'
+    $fontPx = [Math]::Abs((Get-MetricsHeight 9 $Dpi))
+    $cf = Get-MapValue $vals 'CaptionFont'
+    if ($cf) {
+        $from = Get-MapValue $Original 'Dpi'
+        $info = Get-LogFontInfo (Convert-LogFontDpi ([Convert]::FromBase64String([string]$cf)) `
+                                     $(if ($from) { [int]$from } else { 96 }) $Dpi)
+        if ($info -and $info.Height -ne 0) { $fontPx = [Math]::Abs($info.Height) }
+    }
+    $raw = Get-MapValue $vals 'CaptionHeight'
+    $tw = 0
+    $twips = if ($null -ne $raw -and [int]::TryParse([string]$raw, [ref]$tw)) { $tw } else { $null }
+    $px = if ($null -ne $twips) { Get-Rounded ([Math]::Abs($twips) * $Dpi / 1440) } else { 0 }
+    $raise = $NewFontPx -gt $fontPx
+    if ($raise) { $px = [Math]::Max($px, $NewFontPx + 10 * (Get-Rounded ($Dpi / 96))) }
+    return [pscustomobject]@{ Raise = $raise; Px = $px; Raw = $raw; Twips = $twips }
+}
+
 # --------------------------------------------------------------- 目标配置单元
 # 标量 metric 存的是 twip（DPI 无关），但 LOGFONT 的 lfHeight 是像素，基准是该
 # 配置单元自己的 AppliedDPI —— 登录时 Windows 会按新 DPI 重算。所以逐个 hive 取。
@@ -324,8 +385,9 @@ function Invoke-OnUserHive {
 
 # --------------------------------------------------------------- 直接写配置单元
 # 返回该 hive 的原值（base64 / 字符串 / $null 表示原本不存在），供还原用。
+# 实写那趟要给 $Original（这个 hive 在备份里的那一项），标题栏高度按它算。
 function Update-MetricsHive {
-    param($root, [switch]$BackupOnly)
+    param($root, [switch]$BackupOnly, $Original)
 
     $dpi  = Get-HiveDpi $root
     $vals = [ordered]@{}
@@ -348,12 +410,10 @@ function Update-MetricsHive {
         if (-not $k) { throw "无法打开 $MetricsSubKey" }
     }
     try {
-        $oldCaption = $null
         foreach ($role in $MetricsRoles.Keys) {
             $old = $k.GetValue($role, $null)
             if ($old -is [byte[]]) {
                 $vals[$role] = [Convert]::ToBase64String($old)
-                if ($role -eq 'CaptionFont') { $oldCaption = $old }
             } else {
                 $vals[$role] = $null
                 $old = $null
@@ -375,13 +435,17 @@ function Update-MetricsHive {
         $pb = $k.GetValue('PaddedBorderWidth', $null)
         $vals['PaddedBorderWidth'] = if ($null -eq $pb) { $null } else { [string]$pb }
 
-        $oldInfo = Get-LogFontInfo $oldCaption
-        $newCaptionH = Get-MetricsHeight $MetricsSize $dpi
-        # 只在标题栏字号确实变大时才抬高标题栏，避免文字被裁；变小/不变就别动
-        if (-not $BackupOnly -and $oldInfo -and
-            ([Math]::Abs($newCaptionH) -gt [Math]::Abs($oldInfo.Height))) {
-            $px = [Math]::Abs($newCaptionH) + 10 * (Get-Rounded ($dpi / 96))
-            Set-MetricScalar $k 'CaptionHeight' (0 - (Get-Rounded ($px * 1440 / $dpi)))
+        # 标题栏高度按备份里的原值算，见 Get-CaptionTarget。还原走的是原值本身，
+        # 不经过像素换算 —— twip 换成像素再换回来，某些 DPI 下会差几个 twip。
+        if (-not $BackupOnly -and $Original) {
+            $cap = Get-CaptionTarget $Original ([Math]::Abs((Get-MetricsHeight $MetricsSize $dpi))) $dpi
+            if ($cap.Raise) {
+                Set-MetricScalar $k 'CaptionHeight' (0 - (Get-Rounded ($cap.Px * 1440 / $dpi)))
+            } elseif ($null -eq $cap.Raw) {
+                $k.DeleteValue('CaptionHeight', $false)
+            } elseif ($null -ne $cap.Twips) {
+                Set-MetricScalar $k 'CaptionHeight' $cap.Twips
+            }
         }
         # Win11 边框：为 0 时补一个最小值。解析不出数字的（空串之类）当作
         # 「看不懂，别碰」，不要让 [int] 抛异常把整个配置单元带崩。
@@ -466,11 +530,12 @@ function Send-MetricsSettingChange {
 # $MetricsTwips 还原用，单位是【负 twip】，和注册表里那份一模一样，换算成
 #   NONCLIENTMETRICS 要的像素在这里做 —— 只有这里知道当前会话的 DPI。
 # $FromDpi = $LogFonts 里那些 lfHeight 的 DPI 基准。
+# $Original 安装用，当前用户在备份里的那一项，标题栏高度按它算。
 # [CmdletBinding()] 不是摆设：没有它，简单函数会把认不出来的 -Xxx 悄悄塞进
 # $args，参数名写错就变成「静默不生效」。
 function Set-MetricsViaSpi {
     [CmdletBinding()]
-    param([hashtable]$LogFonts, [hashtable]$MetricsTwips, [int]$FromDpi = 0)
+    param([hashtable]$LogFonts, [hashtable]$MetricsTwips, [int]$FromDpi = 0, $Original)
 
     $dpi = Get-SystemDpi
 
@@ -507,8 +572,6 @@ function Set-MetricsViaSpi {
         $buf = New-Object byte[] $NCM_SIZE
         [System.Runtime.InteropServices.Marshal]::Copy($p, $buf, 0, $NCM_SIZE)
 
-        $oldCaptionH = [BitConverter]::ToInt32($buf, $NcmFontOffset['CaptionFont'])
-
         foreach ($e in $NcmFontOffset.GetEnumerator()) {
             $old = New-Object byte[] $LF_SIZE
             [Array]::Copy($buf, $e.Value, $old, 0, $LF_SIZE)
@@ -524,10 +587,14 @@ function Set-MetricsViaSpi {
 
         # 这里的几何值是【像素】，不是注册表那套 twip
         if (-not $LogFonts) {
-            $newCaptionH = [BitConverter]::ToInt32($buf, $NcmFontOffset['CaptionFont'])
-            if ([Math]::Abs($newCaptionH) -gt [Math]::Abs($oldCaptionH)) {
-                $ch = [Math]::Abs($newCaptionH) + 10 * (Get-Rounded ($dpi / 96))
-                [Array]::Copy([BitConverter]::GetBytes([int]$ch), 0, $buf, $NCM_OFF_CAPTIONHEIGHT, 4)
+            # 标题栏高度按备份里的原值算，见 Get-CaptionTarget。会话里没有「这一项
+            # 不存在」这个状态，原值缺了（或解析不了）又不用抬高时，只能维持现状。
+            if ($Original) {
+                $newCaptionH = [BitConverter]::ToInt32($buf, $NcmFontOffset['CaptionFont'])
+                $cap = Get-CaptionTarget $Original ([Math]::Abs($newCaptionH)) $dpi
+                if ($cap.Raise -or $null -ne $cap.Twips) {
+                    [Array]::Copy([BitConverter]::GetBytes([int]$cap.Px), 0, $buf, $NCM_OFF_CAPTIONHEIGHT, 4)
+                }
             }
             if ([BitConverter]::ToInt32($buf, $NCM_OFF_PADDEDBORDER) -eq 0) {
                 $pb = 1 + (Get-Rounded ($dpi / 96))
@@ -634,7 +701,8 @@ function Invoke-WindowMetricsApply {
     }
 
     # 只动备份里确实记录了的那些，保证「改过的 ⊆ 备份过的」
-    $backedUp = Get-MapKeys (Get-MapValue $bk 'WindowMetrics')
+    $wmBackup = Get-MapValue $bk 'WindowMetrics'
+    $backedUp = Get-MapKeys $wmBackup
 
     # --- 第二遍：写入
     $ok = 0
@@ -645,14 +713,17 @@ function Invoke-WindowMetricsApply {
             $skipped++
             continue
         }
+        # 标题栏高度要和【原值】比，不能和当前值比，见 Get-CaptionTarget。
+        # scriptblock 里靠动态作用域拿到它，所以名字别以 hive 打头（见 Invoke-OnUserHive）。
+        $original = Get-MapValue $wmBackup $t.Key
         try {
             if ($t.Sid -eq $mySid) {
                 # 自己：走 API。SPIF_UPDATEINIFILE 会自己落盘，而且当场生效，不用注销
-                $dpi = Set-MetricsViaSpi
+                $dpi = Set-MetricsViaSpi -Original $original
                 Write-Host ('[经典] {0,-42} 已通过 SystemParametersInfo 立即生效 (dpi={1})' -f `
                             $t.Who, $dpi) -ForegroundColor Green
             } else {
-                $b = Invoke-OnUserHive $t { param($root) Update-MetricsHive $root }
+                $b = Invoke-OnUserHive $t { param($root) Update-MetricsHive $root -Original $original }
                 Write-Host ('[经典] {0,-42} 已写入 6 项 (dpi={1})，下次登录生效' -f `
                             $t.Who, $b.Dpi) -ForegroundColor Green
             }

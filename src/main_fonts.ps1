@@ -6,13 +6,17 @@
 # 两组文件：
 #   拉丁 = "Segoe UI" 那 12 个静态文件 + "Segoe UI Variable" 那 1 个可变字体
 #          （都在 SegoeUIMod\）
-#   汉字 = 微软雅黑/宋体/黑体/等线 那 8 个（CJKMod\）
+#   汉字 = 微软雅黑/宋体/黑体/等线 那 9 个（CJKMod\）
 # 两组一起装：拉丁那些文件的汉字已经裁掉了，外壳的中文要靠回退落到
 # 「微软雅黑」，也就是落到汉字这一组。只装其中一半，中文就还是原版微软雅黑。
 #
+# 雅黑 Semibold 那一项是 Windows 本来【没有】的，原值记成「不存在」，还原时
+# 删掉。它给 "Segoe UI Semibold" 的中文回退用（机制 4），为什么要多造这一档
+# 见 make_cjk.py 开头。
+#
 # Segoe UI Variable 是【另一个】注册项、另一个文件：Windows 11 的外壳（设置、
 # 开始菜单、通知中心）和所有 WinUI 3 程序用的是它，不是上面那 12 个静态文件。
-# 少了它，Win11 外壳那一层文字就一直是微软原版。和另外 20 个一起装、一起还原，
+# 少了它，Win11 外壳那一层文字就一直是微软原版。和另外 21 个一起装、一起还原，
 # 不单独开关 —— 它和那 12 个静态文件是同一族的两种形态，分开装只会得到一半
 # 换了一半没换的界面。
 #
@@ -38,14 +42,15 @@ $MapUI = [ordered]@{
 }
 
 $MapCJK = [ordered]@{
-    'Microsoft YaHei & Microsoft YaHei UI (TrueType)'             = 'CJKMod\WinModernSC-YaHei.ttc'
-    'Microsoft YaHei Bold & Microsoft YaHei UI Bold (TrueType)'   = 'CJKMod\WinModernSC-YaHei-Bold.ttc'
-    'Microsoft YaHei Light & Microsoft YaHei UI Light (TrueType)' = 'CJKMod\WinModernSC-YaHei-Light.ttc'
-    'SimSun & NSimSun (TrueType)'                                 = 'CJKMod\WinModernSC-SimSun.ttc'
-    'SimHei (TrueType)'                                           = 'CJKMod\WinModernSC-SimHei.ttf'
-    'DengXian (TrueType)'                                         = 'CJKMod\WinModernSC-DengXian.ttf'
-    'DengXian Bold (TrueType)'                                    = 'CJKMod\WinModernSC-DengXian-Bold.ttf'
-    'DengXian Light (TrueType)'                                   = 'CJKMod\WinModernSC-DengXian-Light.ttf'
+    'Microsoft YaHei & Microsoft YaHei UI (TrueType)'                   = 'CJKMod\WinModernSC-YaHei.ttc'
+    'Microsoft YaHei Bold & Microsoft YaHei UI Bold (TrueType)'         = 'CJKMod\WinModernSC-YaHei-Bold.ttc'
+    'Microsoft YaHei Light & Microsoft YaHei UI Light (TrueType)'       = 'CJKMod\WinModernSC-YaHei-Light.ttc'
+    'Microsoft YaHei Semibold & Microsoft YaHei UI Semibold (TrueType)' = 'CJKMod\WinModernSC-YaHei-Semibold.ttc'
+    'SimSun & NSimSun (TrueType)'                                       = 'CJKMod\WinModernSC-SimSun.ttc'
+    'SimHei (TrueType)'                                                 = 'CJKMod\WinModernSC-SimHei.ttf'
+    'DengXian (TrueType)'                                               = 'CJKMod\WinModernSC-DengXian.ttf'
+    'DengXian Bold (TrueType)'                                          = 'CJKMod\WinModernSC-DengXian-Bold.ttf'
+    'DengXian Light (TrueType)'                                         = 'CJKMod\WinModernSC-DengXian-Light.ttf'
 }
 
 # 注册表值名 -> 源文件绝对路径 + 在不在，两条路径共用。

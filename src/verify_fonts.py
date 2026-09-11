@@ -13,6 +13,9 @@
                                  SegUIVar 的覆盖面（没有汉字），源自带 VF 那条
                                  路是整个搬过来的（有汉字），两种都对。
 
+三处放在一起还要比一遍 --regular-weight（见 regular_weight_check）：三个生成
+脚本各跑各的，给的值对不上，Regular 的拉丁和中文就不是一个粗细。
+
 make_cjk.py / make_segoe_ui.py / make_vf.py 生成完会自动跑对应的那一份。也可以
 三份一起单独跑一遍（不需要 source\\，只看产物）：
 
@@ -285,7 +288,8 @@ def verify_cjk(targets, outdir):
                 label = "%s face%d" % (outname, i)
                 bad = []
 
-                real = util.open_system_font(realname, idx, lazy=True)
+                # 派生的那档（util.Derived）比的是派生出来的身份，同一个函数
+                real = util.open_identity(realname, idx, lazy=True)
                 try:
                     bad += identity_problems(font, real)
                 finally:
@@ -506,6 +510,82 @@ def verify_vf(path, realname=None):
     return fails, warns
 
 
+# ------------------------------------------------------- --regular-weight
+def regular_weight_groups():
+    """三处产物各自是用哪个 --regular-weight 生成的（util.read_regular_weight）。
+
+    返回 [(标签, {值: 文件数})]，还没生成的那处跳过。原样搬运的 face（新宋体）
+    是真字体，不是我们生成的，不算；打不开的文件归各自的 verify_* 报，这里跳过。
+    """
+    import make_cjk                   # 这几个模块反过来也 import 本模块，放函数里
+    import make_segoe_ui
+    import make_vf
+
+    def tally(entries):
+        vals = {}
+        for path, skip in entries:
+            if not os.path.exists(path):
+                continue
+            try:
+                fonts = open_faces(path)
+            except Exception:
+                continue
+            try:
+                for i, font in enumerate(fonts):
+                    if i not in skip:
+                        v = util.read_regular_weight(font)
+                        vals[v] = vals.get(v, 0) + 1
+            finally:
+                for f in fonts:
+                    f.close()
+        return vals
+
+    groups = [
+        ("SegoeUIMod", tally([(os.path.join(make_segoe_ui.OUTDIR, s[0]), ())
+                              for s in make_segoe_ui.STYLES])),
+        (make_vf.OUTNAME, tally([(os.path.join(make_vf.OUTDIR, make_vf.OUTNAME),
+                                  ())])),
+        ("CJKMod", tally([(os.path.join(make_cjk.OUTDIR, t[0]),
+                           {i for i, face in enumerate(t[2]) if face[2]})
+                          for t in make_cjk.TARGETS])),
+    ]
+    return [(label, vals) for label, vals in groups if vals]
+
+
+def regular_weight_check():
+    """三处产物的 --regular-weight 对不上时返回一句说明，对得上返回 None。
+
+    三个生成脚本各跑各的，漏给一个就是「Regular 的拉丁 450、中文回退 400」，
+    要渲染出来才看得出来。都调粗过的话顺手打一行，让人看得见这套产物的 Regular
+    不是 400。
+    """
+    groups = regular_weight_groups()
+    values = {v for _label, vals in groups for v in vals}
+    if len(values) > 1:
+        return ("Regular 那一档不是用同一个 --regular-weight 生成的（%s）—— "
+                "三个生成脚本要给同一个值，不然 Regular 的拉丁和中文粗细对不上"
+                % "；".join("%s %s" % (label, "/".join(str(v) for v in sorted(vals)))
+                           for label, vals in groups))
+    if values and values != {util.REGULAR}:
+        log("")
+        log("Regular 那一档的轮廓切在 wght %d（%s%s）"
+            % (values.pop(), "、".join(label for label, _vals in groups),
+               " 一致" if len(groups) > 1 else ""))
+    return None
+
+
+def report_after_build(fails, warns=()):
+    """生成脚本收尾用：自己那一份的结论，外加和另外两处比一遍 --regular-weight。
+
+    这里对不上只提醒、不算失败：多半是另外两处还没用同样的参数重跑，这一趟
+    自己的产物是对的。单独跑本模块时同样的情况算失败，见 main()。
+    """
+    msg = regular_weight_check()
+    if msg:
+        warns = list(warns) + [msg + "。要么这次漏给了参数，要么别处还是旧产物"]
+    report(fails, warns)
+
+
 def report(fails, warns=()):
     """打印自检结论。有失败就非零退出。"""
     log("")
@@ -530,7 +610,9 @@ def main():
                           also=[make_vf.OUTNAME])
     f2, w2 = verify_vf(vf_path)
     f3, w3 = verify_cjk(make_cjk.TARGETS, make_cjk.OUTDIR)
-    report(f1 + f2 + f3, w1 + w2 + w3)
+    # 三处放在一起看，--regular-weight 对不上就是真错了
+    rw = regular_weight_check()
+    report(f1 + f2 + f3 + ([rw] if rw else []), w1 + w2 + w3)
 
 
 if __name__ == "__main__":

@@ -30,6 +30,10 @@ Win11 外壳用的那个 "Segoe UI Variable" 不在这一族里，是另一个�
     STATIC / BOTH   每个输出挑一个同名或最接近的静态字重（下面 STYLES 那张
                     并档表），并存时静态那半已经齐了，用不着动 VF
     VF              源里只有一个可变字体，各档从它实例化出来
+
+源是单个 VF 时可以加 --regular-weight N（400–500）：Regular 和 Italic 这一档
+改在 wght N 上切，身份仍是 400，别的档不动，见 util.outline_weight。
+make_vf.py / make_cjk.py 要给同一个值。
 """
 
 import os
@@ -83,20 +87,23 @@ STYLES = [
 ]
 
 
-def plan_note(merged, fake):
-    """计划表和汇总表末尾那一列：这个输出是并档来的、还是伪斜出来的。
+def plan_note(merged, fake, thick=False):
+    """计划表和汇总表末尾那一列：这个输出是并档来的、伪斜出来的，还是被
+    --regular-weight 调粗的。
 
-    伪斜必须在日志里看得见 —— 它和真斜体的产物在文件名、身份字段上一模一样，
-    不标出来就只能靠肉眼看字形才发现走的是下策那条路。
+    伪斜和调粗都必须在日志里看得见 —— 它们和正常的产物在文件名、身份字段上
+    一模一样，不标出来就只能靠肉眼看字形才发现。
     """
-    tags = ([] if not merged else ["并档"]) + ([] if not fake else
-                                              ["伪斜 %g°" % util.ITALIC_ANGLE])
+    tags = (([] if not merged else ["并档"])
+            + ([] if not fake else ["伪斜 %g°" % util.ITALIC_ANGLE])
+            + ([] if not thick else ["调粗"]))
     return "(%s)" % ", ".join(tags) if tags else ""
 
 
 # 一个输出的施工单。path 和 inst 恰好有一个是 None：静态源给路径，VF 源给
-# (字重, 要不要斜体) 这一对坐标，到时候现切。
-Row = namedtuple("Row", "outname realname label path inst merged fake reg")
+# (字重, 要不要斜体) 这一对坐标，到时候现切。thick = 这一档被 --regular-weight
+# 调粗了（轮廓字重 != 身份字重）。
+Row = namedtuple("Row", "outname realname label path inst merged fake thick reg")
 
 
 def plan_static(src):
@@ -110,11 +117,12 @@ def plan_static(src):
         if hit is None:
             hit = util.pick_source(src.styles, util.upright_chain(chain), outname)
         sname, spath, merged = hit
-        plan.append(Row(outname, realname, sname, spath, None, merged, fake, reg))
+        plan.append(Row(outname, realname, sname, spath, None, merged, fake,
+                        False, reg))
     return plan
 
 
-def plan_vf(vfi):
+def plan_vf(vfi, regular_weight=None):
     """VF：每个输出去 VF 上切哪一档。
 
     切哪一档不看文件名里的样式词，看【被冒充的那个真 Segoe UI 文件】的
@@ -122,18 +130,22 @@ def plan_vf(vfi):
     身份走，两边永远对得上。Semilight 是 350、Semibold 600、Black 900，一档
     不少，也就不必再为 VF 另立一张「输出 -> 字重」对照表。
 
+    例外只有 Regular（400）那一档：给了 --regular-weight 就改切在它上面，
+    Regular 和 Italic 一起，见 util.outline_weight。
+
     斜体：源 VF 带 ital / slnt 轴就切真斜体，不带就照静态那条路的规矩伪斜。
     并档在这条路上不存在 —— 轴是连续的，要哪一档就有哪一档。
     """
     plan = []
     for outname, realname, chain, reg in STYLES:
-        weight = util.system_font_weight(realname)
+        ident = util.system_font_weight(realname)
+        weight = util.outline_weight(ident, regular_weight)
         want_italic = util.is_italic(chain[0])
         fake = want_italic and not vfi.has_italic_axis
         label = "VF wght %d%s" % (weight,
                                   " 斜" if want_italic and not fake else "")
         plan.append(Row(outname, realname, label, None, (weight, want_italic),
-                        False, fake, reg))
+                        False, fake, weight != ident, reg))
     return plan
 
 
@@ -151,35 +163,41 @@ def open_source(row, vfi):
 
 
 def main():
+    args = util.parse_args("用 source\\ 里的字体造出 12 个静态 Segoe UI，"
+                           "输出到 SegoeUIMod\\。")
     src = util.scan_source()
+    rw = util.resolve_regular_weight(src, args.regular_weight)
     util.require_system_fonts([s[1] for s in STYLES])
     os.makedirs(OUTDIR, exist_ok=True)
 
     log("源字体 : %s" % src.describe())
     log("目录   : %s" % util.SOURCE_DIR)
     log("输出到 : %s" % OUTDIR)
+    if rw:
+        log("Regular: 轮廓切在 wght %d（身份仍是 %d）" % (rw, util.REGULAR))
     log("")
 
     vfi = util.VFInstances(src.vf) if src.kind == util.VF else None
     try:
-        plan = plan_vf(vfi) if vfi else plan_static(src)
-        _build(plan, vfi)
+        plan = plan_vf(vfi, rw) if vfi else plan_static(src)
+        _build(plan, vfi, rw)
     finally:
         if vfi:
             vfi.close()
 
     # 生成完当场自检，不通过就非零退出。SegoeUI-Variable.ttf 是 make_vf.py 的
     # 产物，同住这个目录，报给 also 免得被当成旧文件。
-    verify_fonts.report(*verify_fonts.verify_segoe(STYLES, OUTDIR,
-                                                   also=[util.VF_OUTNAME]))
+    verify_fonts.report_after_build(*verify_fonts.verify_segoe(
+        STYLES, OUTDIR, also=[util.VF_OUTNAME]))
 
 
-def _build(plan, vfi):
+def _build(plan, vfi, regular_weight=None):
     # 先把 12 个输出各自用哪个源定下来，打一张表出来再动手
     log("%-28s %-16s %-14s %s" % ("输出", "身份照抄", "源字重", "备注"))
     for r in plan:
         log("  %-28s %-16s %-14s %s"
-            % (r.outname, r.realname, r.label, plan_note(r.merged, r.fake)))
+            % (r.outname, r.realname, r.label,
+               plan_note(r.merged, r.fake, r.thick)))
     log("")
 
     t0 = time.time()
@@ -193,7 +211,8 @@ def _build(plan, vfi):
         out = os.path.join(OUTDIR, outname)
         try:
             util.clone_identity(font, real, "WinModernSC-%s"
-                                % os.path.splitext(outname)[0])
+                                % os.path.splitext(outname)[0],
+                                regular_weight=regular_weight)
             util.clone_metrics(font, real, caret=True)
             util.set_gasp(font)
             if "meta" in font:
@@ -214,8 +233,11 @@ def _build(plan, vfi):
             # 补上源字体缺、而真 Segoe UI 有的那些（西欧重音字母、标点、符号）。
             # 排在裁剪之后：裁完只剩两千来个字形，比对着源字体那四万多个做便宜
             # 一个数量级，而且补进来的本来就都在裁剪目标里，不会被裁掉。
+            # 后备捐赠源按【轮廓】的字重排：VF 那条路切在哪档就是哪档（Regular
+            # 调粗过就是 --regular-weight），静态那条路照旧按身份。
             rep = patch_glyphs.patch(font, real, realname,
-                                     util.system_font_weight(realname),
+                                     r.inst[0] if r.inst
+                                     else util.system_font_weight(realname),
                                      must=util.MUST_LATIN)
             if rep.wanted:
                 log("      " + rep.line("[补字]"))
@@ -229,7 +251,7 @@ def _build(plan, vfi):
         id1 = font["name"].getDebugName(1)
         id2 = font["name"].getDebugName(2)
         font.close()
-        note = plan_note(merged, fake)
+        note = plan_note(merged, fake, r.thick)
         rows.append((outname, id1, id2, sname, n_glyph, util.mb(out), note))
         log("  -> %-28s %6.2f MB  %5d 字形  <- %-16s %s(%.0fs)"
             % (outname, util.mb(out), n_glyph, sname,

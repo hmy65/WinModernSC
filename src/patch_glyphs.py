@@ -135,7 +135,7 @@ def decompose(cp):
 
 
 # ------------------------------------------------------------------ 捐赠源
-# 捐赠字体开一次用一整趟。make_cjk 那边 8 个输出 × 最多 2 个 face = 16 次
+# 捐赠字体开一次用一整趟。make_cjk 那边 9 个输出 × 最多 2 个 face = 18 次
 # 补字，每次都重开一遍 msyh.ttc（20 MB、三万个字形）就白等了。
 # 一律 lazy：只有真被借走的那几百个字形会解开，整张 glyf 不会进内存。
 _DONOR_CACHE = {}
@@ -151,7 +151,7 @@ def _open_donor(name, idx):
 class Donors(object):
     """一次补字用到的捐赠源，按字重排好序。字体本身走 _DONOR_CACHE。"""
 
-    # usWeightClass 查一次就够，一次运行里 20 个输出都在问同样几个文件
+    # usWeightClass 查一次就够，一次运行里十几个输出都在问同样几个文件
     _weights = {}
 
     def __init__(self, first, first_name, weight):

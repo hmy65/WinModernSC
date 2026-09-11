@@ -9,7 +9,9 @@
                               覆盖外壳 / UWP / WinUI / 浏览器 / Office。
                               拉丁那 12 个静态文件、Win11 外壳用的那个可变字体
                               "Segoe UI Variable"，加上中文族(微软雅黑/宋体/
-                              黑体/等线)那 8 个，一共 21 个一起装，不单独开关。
+                              黑体/等线)那 9 个，一共 22 个一起装，不单独开关。
+                              中文那 9 个里有一档是 Windows 本来没有的雅黑
+                              Semibold，给 Segoe UI Semibold 的中文回退用。
       2  FontSubstitutes    —— 只有 GDI 认。兜底那些请求 Tahoma /
                               MS Shell Dlg 的旧式 Win32 程序。
       3  WindowMetrics      —— 经典界面(comctl32)那一层的字体和字号。
@@ -35,6 +37,13 @@ param(
     [switch]${no-font-substitutes},
     [switch]${no-window-metrics},
     [switch]${no-font-link},
+    # 机制 3（经典界面）的字号和字重，只管那 6 个 LOGFONT。
+    # 9 磅是 Windows 自己的默认值。字重名和 main_window_metrics.ps1 里的
+    # $MetricsWeights 一一对应 —— 换字重换的是 GDI 家族名，原因见那边。
+    [ValidateRange(6, 24)]
+    [double]${window-metrics-size} = 9,
+    [ValidateSet('Light', 'Semilight', 'Regular', 'Semibold', 'Bold', 'Black')]
+    [string]${window-metrics-weight} = 'Regular',
     [switch]$DryRun
 )
 
@@ -308,6 +317,10 @@ function Show-Usage {
     Write-Host ''
     Write-Host '  4 个 -no-* 可任意组合；加 -DryRun 只打印将要做的改动，不产生任何副作用。'
     Write-Host ''
+    Write-Host '  经典界面（机制 3）的字号和字重，跟 -install 一起用：'
+    Write-Host '    -window-metrics-size <磅>       默认 9'
+    Write-Host '    -window-metrics-weight <字重>   Light / Semilight / Regular / Semibold / Bold / Black，默认 Regular'
+    Write-Host ''
 }
 
 if ($install -and $revert) {
@@ -316,6 +329,13 @@ if ($install -and $revert) {
 if (-not $install -and -not $revert) {
     Show-Usage
     return
+}
+# 这两个只对机制 3 的安装有意义。配 -revert 或 -no-window-metrics 时会被静默
+# 忽略，而用户多半以为它生效了，所以直接报错。
+foreach ($metricsArg in @('window-metrics-size', 'window-metrics-weight')) {
+    if (-not $PSBoundParameters.ContainsKey($metricsArg)) { continue }
+    if ($revert) { throw "-$metricsArg 只能配 -install：还原一律回到备份里的原值。" }
+    if (${no-window-metrics}) { throw "-$metricsArg 和 -no-window-metrics 互相矛盾。" }
 }
 
 $admin = ([Security.Principal.WindowsPrincipal] `
@@ -368,7 +388,8 @@ $doLink    = -not ${no-font-link}
 Write-Host ''
 Write-Host ('机制 1  字体文件   : {0}' -f $(if ($doFonts)   { '装' } else { '跳过 (-no-fonts)' })) -ForegroundColor White
 Write-Host ('机制 2  GDI 替换表 : {0}' -f $(if ($doSubst)   { '装' } else { '跳过 (-no-font-substitutes)' })) -ForegroundColor White
-Write-Host ('机制 3  经典界面   : {0}' -f $(if ($doMetrics) { '装' } else { '跳过 (-no-window-metrics)' })) -ForegroundColor White
+Write-Host ('机制 3  经典界面   : {0}' -f $(if ($doMetrics) { "装（{0}pt {1}）" -f $MetricsSize, ${window-metrics-weight} }
+                                            else { '跳过 (-no-window-metrics)' })) -ForegroundColor White
 Write-Host ('机制 4  中文回退链 : {0}' -f $(if ($doLink)    { '装' } else { '跳过 (-no-font-link)' })) -ForegroundColor White
 Write-Host ('目标族   : {0}     字体落脚点 : {1}' -f $SUB, $TargetDir) -ForegroundColor White
 
