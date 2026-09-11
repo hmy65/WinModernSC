@@ -91,7 +91,7 @@ possible.** [`src/patch_glyphs.py`](src/patch_glyphs.py) patches in the accented
 symbols that the Windows font being replaced has and the source does not. Characters that
 decompose (`À = A + ̀ `) become composite glyphs whose base references the source's own
 letter, so style and advance width stay the source's; only what does not decompose is
-imported whole. See "[Patching in missing glyphs](#patching-in-missing-glyphs)".
+imported whole. See "[Generate the fonts](#2-generate-the-fonts)".
 
 **5. The Windows 11 shell layer gets replaced too.** Win11's Settings, Start menu and every
 WinUI 3 app do not use those 12 static files — they use the variable font `Segoe UI
@@ -178,29 +178,11 @@ decided on, and all three generators branch on it:
 - Extra styles (`ExtraLight`, `SemiBold`, `SemiLight` …) are used when present and skipped
   when not.
 
-**Whatever the source is missing gets patched in.** See
-"[Patching in missing glyphs](#patching-in-missing-glyphs)" below —
-[`src/patch_glyphs.py`](src/patch_glyphs.py) fills in the Western European accented letters,
-punctuation and symbols that the Windows font being replaced has and the source does not,
-**composing them from the source's own letters wherever it can** and only importing outright
-when it cannot.
-
 To give the Win11 shell genuinely distinct weights, add a `<Family>-VF.ttf` to `source\`
 (the `BOTH` layout): a `Segoe UI Variable` synthesized from a `STATIC` source usually ends up
 with no `wght` axis, leaving the weights to Windows' own synthetic bolding. The 12 static
 `Segoe UI` files are unaffected either way — they have always used one real static weight
 each.
-
-#### Patching in missing glyphs
-
-Whenever the source covers less than the Windows font it replaces, something drops out.
-Dropping out does not mean tofu boxes — the stock chain mechanism 4 preserves, and
-DirectWrite's own fallback, will find the character — but they find it in *another font*, so
-it does not match the surrounding text. The extreme case is real: some sources keep only CJK
-and hit just 110 of the real `segoeui.ttf`'s 3996 codepoints, which leaves the entire UI's
-Western text riding on fallback and that layer doing nothing.
-
-So [`src/patch_glyphs.py`](src/patch_glyphs.py) fills the gaps.
 
 ### 2. Generate the fonts
 
@@ -227,10 +209,13 @@ The three are order-independent and write their own outputs (`make_vf.py` and
 `make_segoe_ui.py` share `SegoeUIMod\`, but the filenames do not overlap and each side's
 self-check knows the other's output is not a stale leftover).
 
-Any output that needed patching prints a line reading
-`[补字] 补 N 个码位，拼 X，搬 Y，组合符号 Z；来源 …` — how many codepoints were filled in,
-how many were composed rather than imported, and which files they were borrowed from. See
-"[Patching in missing glyphs](#patching-in-missing-glyphs)" above.
+**Missing glyphs are filled in automatically.** Accented letters, punctuation and symbols
+that the replaced Windows font has but the source lacks get added to the output, so they
+don't fall back to some other font that clashes with the surrounding text. Where possible
+they are built from the source's own letter plus an accent; otherwise the whole glyph is
+copied from a system font. Any output that got patched prints a
+`[补字] 补 N 个码位，拼 X，搬 Y，组合符号 Z；来源 …` line. For what gets patched and how, see
+the header comment in [`src/patch_glyphs.py`](src/patch_glyphs.py).
 
 When a generator finishes it immediately runs [`src/verify_fonts.py`](src/verify_fonts.py)
 over its own output and exits non-zero if anything is wrong. To re-check existing output
