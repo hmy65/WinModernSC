@@ -280,14 +280,17 @@ reads a BOM-less `.ps1` using the system ANSI code page and will mangle the non-
 
 ## Credits
 
-- [fonttools](https://github.com/fonttools/fonttools) — library used to manipulate and generate the font files.
+- [fonttools](https://github.com/fonttools/fonttools) — library used to manipulate, generate and verify the font files.
 - [noMeiryoUI](https://github.com/Tatsu-syo/noMeiryoUI) — reference for the `WindowMetrics`
   layer (mechanism 3).
 - [Sarasa Gothic](https://github.com/be5invis/Sarasa-Gothic) — the recommended source font.
+- [OpenType specification](https://learn.microsoft.com/typography/opentype/spec/) — the
+  basis for how the font tables are written.
 - Claude Code.
 
-The generated fonts keep the source font's own copyright and license `name` records. They
-are built for local system-font substitution and are not meant for redistribution; check
-your source font's license before sharing them.
+The generated fonts keep the source font's own copyright and license `name` records. Glyphs
+patched in come from the Windows fonts on your machine and are copyrighted by Microsoft. The
+generated fonts are built for local system-font substitution and are not meant for
+redistribution; check your source font's license before sharing them.
 
 Licensed under the [Apache License 2.0](LICENSE).

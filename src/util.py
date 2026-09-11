@@ -40,8 +40,9 @@ IDENTITY_NAME_IDS = (1, 2, 4, 6, 16, 17, 18, 21, 22)
 SOURCE_NAME_IDS = (0, 5, 7, 8, 9, 11, 13, 14)
 
 LOCAL_NOTE = ("Repackaged locally by WinModernSC for system font substitution. "
-              "Outlines, copyright and license belong to the source font. "
-              "Not affiliated with Microsoft; product names are trademarks of "
+              "Outlines, copyright and license belong to the source font, "
+              "except glyphs patched in from Windows fonts, which belong to "
+              "Microsoft. Not affiliated with Microsoft; product names are trademarks of "
               "their respective owners.")
 
 # gasp 的四个标志位。全尺寸都用 15（四位全开）= 灰度 + 网格对齐 +

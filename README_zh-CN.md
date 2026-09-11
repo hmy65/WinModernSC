@@ -244,9 +244,12 @@ SimSun-ExtB/ExtG 生僻字扩展、微軟正黑體。
 - [noMeiryoUI](https://github.com/Tatsu-syo/noMeiryoUI) —— `WindowMetrics` 这一层
   （机制 3）的参考。
 - [Sarasa Gothic](https://github.com/be5invis/Sarasa-Gothic) —— 推荐使用的源字体。
+- [OpenType 规范](https://learn.microsoft.com/typography/opentype/spec/) —— 字体各张表
+  怎么写的依据。
 - Claude Code。
 
-生成出来的字体保留源字体自己的版权和许可 `name` 记录。它们是为本机的系统字体替换而造的，
-不是拿来分发的；要分享之前请先看清楚源字体的许可。
+生成出来的字体保留源字体自己的版权和许可 `name` 记录。补进来的字形取自你本机的 Windows
+字体，版权归微软。生成的字体是为本机的系统字体替换而造的，不是拿来分发的；要分享之前请先
+看清楚源字体的许可。
 
 以 [Apache License 2.0](LICENSE) 授权。
