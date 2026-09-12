@@ -227,5 +227,8 @@ source_backup/
 CJKMod/
 SegoeUIMod/
 
+# 历史代码备份
+source_backup/
+
 # 安装时写的注册表备份，只对本机有意义
 winmodernsc-backup.json
