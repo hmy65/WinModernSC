@@ -4,6 +4,7 @@
 #   Fonts           机制 1          值 = 原来的路径，$null = 原本不存在
 #   FontSubstitutes 机制 2          同上
 #   WindowMetrics   机制 3          每个配置单元 6 个 base64 LOGFONT + 2 个标量
+#   AutoRestore     机制 3 的登录自动恢复：Run 值原值、脚本目录和文件清单
 #   FontLink        机制 4          值是 REG_MULTI_SZ，要包成数组写回
 #   Install         装了哪些文件、目录是不是我们建的
 
@@ -42,6 +43,17 @@ function Show-RevertPlan($saved) {
         }
     }
 
+    $ar = Get-MapValue $saved 'AutoRestore'
+    if ($ar) {
+        $orig = Get-MapValue $ar 'RunValue'
+        $files = @(Get-MapValue $ar 'Files' | Where-Object { $_ })
+        Write-Host ''
+        Write-Host ('  [AutoRestore] 登录自动恢复，最先拆：Run 值 {0} {1}' -f $AutoRestoreName,
+                    $(if ($null -eq $orig) { '删除（原本不存在）' } else { '还原为 ' + $orig }))
+        Write-Host ('      删除 {0} 个脚本，目录 {1}（{2}）' -f $files.Count, (Get-MapValue $ar 'Dir'),
+                    $(if (Get-MapValue $ar 'CreatedDir') { '本脚本创建，清空后连目录一起删' } else { '非本脚本创建，只删文件' })) -ForegroundColor DarkGray
+    }
+
     $wm = Get-MapValue $saved 'WindowMetrics'
     if ($wm) {
         Write-Host ''
@@ -72,6 +84,9 @@ function Show-RevertPlan($saved) {
 }
 
 function Invoke-Revert($saved) {
+    # 登录自动恢复最先拆，理由见 Remove-MetricsAutoRestore。
+    Remove-MetricsAutoRestore $saved
+
     # 先还原不涉及文件的那几层。它们失败了也不影响后面删字体。
     Restore-WindowMetricsSection $saved
 

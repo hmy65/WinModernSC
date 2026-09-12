@@ -120,8 +120,10 @@ def plan_vf(regular_weight=None):
     """VF：每个输出去 VF 上切哪一档。
 
     切哪一档看【被冒充的那个系统中文字体】的 usWeightClass —— 微软雅黑
-    Light/Regular/Bold 是 300/400/700，等线三档同理，宋体黑体都是 400，
-    派生的雅黑 Semibold 是它自己写明的 600。
+    Light/Regular/Bold 是 290/400/700（Light 那档不是整数档，msyhl.ttc 两个
+    face 写的都是 290），等线是 300/400/700，宋体黑体都是 400，派生的雅黑
+    Semibold 是它自己写明的 600。同是 Light，雅黑和等线差了 10，所以只能一个个
+    去读，不能按样式名套一张表。
     clone_identity() 本来就把这个值原样抄进产物，轮廓跟着身份走，所以这条
     路不需要 TARGETS 那张并档表，也不需要另立一张字重对照表。
 

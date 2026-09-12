@@ -9,35 +9,59 @@
 # 前两套机制只能做「家族名替换」，改不了字号 / 字重 / 渲染质量，也改不了
 # 标题栏、菜单、滚动条的几何尺寸 —— 那些都在这一层。
 # 这一层是【每用户】的，所以要遍历所有用户配置单元。
+# 挂的族名也和前两套不一样：这里写中文族 "Microsoft YaHei UI"，理由见下面 $YaHei。
+#
+# 显示缩放一变，Windows 会在下次登录时把这一层重置回默认。字号或字重非默认时这会
+# 丢东西，所以还登记了一个登录脚本负责写回去（默认 9pt Regular 不装，理由见文末
+# 「登录自动恢复」）。那个脚本（logon_window_metrics.ps1）单独 dot-source 本文件，
+# 那边没有 main.ps1，只补了 $SUB、两个 window-metrics 参数（三个都由 Run 那行命令传
+# 给它）和 Get-MapValue。它用到的 Test-MetricsInRegistry、Test-MetricsInSession、
+# Update-MetricsHive -BackupOnly、Set-MetricsViaSpi，连同这几个往下调的函数，都不能再
+# 依赖 main.ps1 里别的 helper。
+
+# 这一层挂的中文族名，GDI 家族名。机制 4 的回退链挂的也是它（main_font_link.ps1 里
+# 那些 'Microsoft YaHei UI ...' 字面量），zh-CN 版 Windows 重置这一层时也落回它。
+# 不跟着 main.ps1 的 $SUB 走，所以写死在这儿：$SUB 是「GDI 替换的目标族」那个旋钮，
+# 这里要的是「Windows 自己的经典界面默认族」，两者不是一回事。
+$YaHei = 'Microsoft YaHei UI'
 
 # -window-metrics-weight 的字重名 -> 写进 LOGFONT 的 (lfFaceName, lfWeight)。
-# 家族都在 "Segoe UI" 名下，和前两套机制的目标族一致，全系统只有一个「真身」。
 #
-# 换字重换的是【家族名】，不是 lfWeight。GDI 先按 lfFaceName 找家族、再在家族
-# 里挑文件，而 "Segoe UI" 这个 GDI 家族只有 Regular(400) 和 Bold(700) 两个正体
-# 文件，Light / Semilight / Semibold / Black 各自是独立的家族。Win11 26200 实测
-# （ClearType 渲染比对点阵）：
-#     "Segoe UI" + 500   和 400 逐像素相同，等于没改
-#     "Segoe UI" + 600   拿的是 Regular 再合成加粗，拉丁中文都是假粗
-#     "Segoe UI Semibold" + 400/500/600/700   四种写法逐像素相同，都是真 Semibold
-# lfWeight 写该文件真实的 usWeightClass：GDI 下写不写真值画出来一样（上面最后
-# 一条），但 GetTextMetrics 报回来的就是真值，WPF 这类单独读 lfWeight 的程序
-# （SystemFonts.MessageFontWeight）也就读得对。
+# 这一层挂的是【中文族名】"Microsoft YaHei UI"，不是前两套机制那个 "Segoe UI"。
+# 理由是这一层和别的层不一样 —— 它有个 Windows 自己认定的默认值，而且会被强制写回：
+#   · zh-CN 版 Windows 的经典界面默认就是 Microsoft YaHei UI，显示缩放一变，Windows
+#     也是把这 6 项重置回这个族（见文末「登录自动恢复」）。挂同一个族，装完的状态
+#     和系统默认状态就是一回事，重置只会丢字号字重，不会再出现「装完是 Segoe UI、
+#     缩放改过之后变 Microsoft YaHei UI」这两种外观。
+#   · 中文直接来自这一族的文件，不必再过 FontLink\SystemLink（机制 4）那条回退链，
+#     也就没有链上那个 128,96 的缩放。
+#   · Bold 拿到的是真 Bold 文件：Win11 26200 实测 msyhl/msyh/msyhbd 三个 ttc 的
+#     usWeightClass 是 290/400/700，"Microsoft YaHei UI" 这个 GDI 家族里 400 和 700
+#     都是真文件（EnumFontFamiliesEx 确认）。走 "Segoe UI" 时中文是雅黑合成加粗。
+# 机制 1 把这几档雅黑全指向了我们的文件，所以挂中文族名拿到的仍然是源字体；反过来说，
+# 【没装机制 1 的话这一层等于没换】，和挂 Segoe UI 时是一个道理。
 #
-# 中文走的是各家族自己那条 FontLink\SystemLink（机制 4），所以中文粗细跟着家族：
-# Light -> 雅黑 Light，Semilight / Regular -> 雅黑，Semibold -> 雅黑 Semibold
-# （make_cjk.py 派生的那档），Black -> 雅黑 Bold。Bold 例外：它和 Regular 同属
-# "Segoe UI"、共用一条链，中文是雅黑再合成加粗（见 main_font_link.ps1）。
+# 换字重换的仍然是【家族名】，不是 lfWeight：GDI 先按 lfFaceName 找家族、再在家族里
+# 挑文件。雅黑这边 Light 和 Semibold 各自是独立家族，Regular / Bold 共用一个家族、
+# 靠 lfWeight 区分。lfWeight 写该文件真实的 usWeightClass —— GDI 下写不写真值画出来
+# 一样，但 GetTextMetrics 报回来的就是真值，WPF 这类单独读 lfWeight 的程序
+# （SystemFonts.MessageFontWeight）也就读得对。所以 Light 写 290 不是 300。
+#
+# Semilight 和 Black 例外，仍旧挂 "$SUB ..."：雅黑没有这两档，换过去会把拉丁的这两个
+# 字重一起丢掉（拉丁退成 Regular / Bold）。它们的中文照旧走机制 4 的回退链 ——
+# Semilight -> 雅黑 Regular，Black -> 雅黑 Bold，和那边的挂法一致。
+# 雅黑 Semibold 是 make_cjk.py 派生出来的那一档（Windows 本来没有），face1 的族名
+# 就叫 "Microsoft YaHei UI Semibold"，机制 4 的回退链挂的也是它。
 #
 # 斜体那 6 个不在这里：界面文字不能是斜的，Set-LogFontFields 也会把 lfItalic 清零。
 # 名字和 main.ps1 里 -window-metrics-weight 的 ValidateSet 一一对应。
 $MetricsWeights = [ordered]@{
-    Light     = @{ Face = "$SUB Light";     Weight = 300 }
-    Semilight = @{ Face = "$SUB Semilight"; Weight = 350 }
-    Regular   = @{ Face = $SUB;             Weight = 400 }
-    Semibold  = @{ Face = "$SUB Semibold";  Weight = 600 }
-    Bold      = @{ Face = $SUB;             Weight = 700 }
-    Black     = @{ Face = "$SUB Black";     Weight = 900 }
+    Light     = @{ Face = "$YaHei Light";    Weight = 290 }
+    Semilight = @{ Face = "$SUB Semilight";  Weight = 350 }
+    Regular   = @{ Face = $YaHei;            Weight = 400 }
+    Semibold  = @{ Face = "$YaHei Semibold"; Weight = 600 }
+    Bold      = @{ Face = $YaHei;            Weight = 700 }
+    Black     = @{ Face = "$SUB Black";      Weight = 900 }
 }
 if (-not $MetricsWeights.Contains(${window-metrics-weight})) {
     throw "字重表里没有 ${window-metrics-weight}，和 main.ps1 的 ValidateSet 对不上了。"
@@ -88,7 +112,14 @@ $NcmScalarOffset = [ordered]@{
     PaddedBorderWidth = $NCM_OFF_PADDEDBORDER
 }
 
-if (-not ('FontDeploy.Spi' -as [type])) {
+# SPI / GDI 那几个 P/Invoke。【按需】编译，不在 dot-source 时就编：Windows PowerShell
+# 5.1 的 Add-Type 走的是 Microsoft.CSharp.CSharpCodeProvider，会现拉一个 csc.exe 把这段
+# C# 编成程序集 —— 本机实测进程内第一次 270ms（第二次 13ms，贵的是启动编译器），登录
+# 那会儿磁盘正忙，冷启动能占掉一两秒。而登录脚本绝大多数时候只查一下注册表就收工
+# （Test-MetricsInRegistry），根本用不到这些函数，不该为此付这笔钱。
+# 用到它们的四个函数各自在开头调一次，编过就直接返回。
+function Initialize-SpiType {
+    if ('FontDeploy.Spi' -as [type]) { return }
     Add-Type -Namespace FontDeploy -Name Spi -MemberDefinition @'
 [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError=true)]
 public static extern bool SystemParametersInfoW(uint uiAction, uint uiParam, System.IntPtr pvParam, uint fWinIni);
@@ -115,6 +146,7 @@ function Get-Rounded([double]$v) {
 # 必须在任何 DPI 查询之前调用 SetProcessDPIAware。否则在高 DPI 机器上 SPI
 # 返回的是被虚拟化的 96-DPI 值，原样写回去等于把整个界面缩小一圈。
 function Get-SystemDpi {
+    Initialize-SpiType
     [void][FontDeploy.Spi]::SetProcessDPIAware()
     $dc = [FontDeploy.Spi]::GetDC([IntPtr]::Zero)
     if ($dc -eq [IntPtr]::Zero) { return 96 }
@@ -523,6 +555,7 @@ function Restore-MetricsHive {
 
 # --------------------------------------------------------------- 当前用户走 API
 function Send-MetricsSettingChange {
+    Initialize-SpiType
     $r = [UIntPtr]::Zero
     # HWND_BROADCAST=0xFFFF  WM_SETTINGCHANGE=0x001A  SMTO_ABORTIFHUNG=0x0002
     # 不用 SPIF_SENDCHANGE：那是同步广播，遇到一个卡死的程序整个调用就挂住。
@@ -543,6 +576,7 @@ function Set-MetricsViaSpi {
     [CmdletBinding()]
     param([hashtable]$LogFonts, [hashtable]$MetricsTwips, [int]$FromDpi = 0, $Original)
 
+    Initialize-SpiType
     $dpi = Get-SystemDpi
 
     # --- 1) 图标字体 ---
@@ -630,6 +664,93 @@ function Set-MetricsViaSpi {
     return $dpi
 }
 
+# 当前会话里的 6 个 LOGFONT，键名同 $MetricsRoles。只读。
+# SetProcessDPIAware 【必须】赶在下面两个 SPI_GET 之前，理由见 Get-SystemDpi：
+# 进程还没声明 DPI 感知时，SPI 返回的 lfHeight 是被虚拟化成 96 DPI 的值，拿去和
+# 按真实 DPI 算出来的目标值比，缩放不是 100% 的机器上永远比不上。所以自己调一次，
+# 不指望调用方先调 Get-SystemDpi —— 写成 Test-MetricsMatch (Read-SessionLogFonts)
+# (Get-SystemDpi) 的话，PowerShell 求值参数是从左到右的，反而是本函数先跑。
+function Read-SessionLogFonts {
+    Initialize-SpiType
+    [void][FontDeploy.Spi]::SetProcessDPIAware()
+    $out = [ordered]@{}
+    $q = [System.Runtime.InteropServices.Marshal]::AllocHGlobal($LF_SIZE)
+    try {
+        if (-not [FontDeploy.Spi]::SystemParametersInfoW(0x001F, $LF_SIZE, $q, 0)) {   # SPI_GETICONTITLELOGFONT
+            throw ('SPI_GETICONTITLELOGFONT 失败 (Win32 错误 {0})' -f `
+                   [System.Runtime.InteropServices.Marshal]::GetLastWin32Error())
+        }
+        $lf = New-Object byte[] $LF_SIZE
+        [System.Runtime.InteropServices.Marshal]::Copy($q, $lf, 0, $LF_SIZE)
+        $out['IconFont'] = $lf
+    } finally { [System.Runtime.InteropServices.Marshal]::FreeHGlobal($q) }
+
+    $p = [System.Runtime.InteropServices.Marshal]::AllocHGlobal($NCM_SIZE)
+    try {
+        [System.Runtime.InteropServices.Marshal]::WriteInt32($p, 0, $NCM_SIZE)
+        if (-not [FontDeploy.Spi]::SystemParametersInfoW(0x0029, $NCM_SIZE, $p, 0)) {  # SPI_GETNONCLIENTMETRICS
+            throw ('SPI_GETNONCLIENTMETRICS 失败 (Win32 错误 {0})' -f `
+                   [System.Runtime.InteropServices.Marshal]::GetLastWin32Error())
+        }
+        $buf = New-Object byte[] $NCM_SIZE
+        [System.Runtime.InteropServices.Marshal]::Copy($p, $buf, 0, $NCM_SIZE)
+        foreach ($e in $NcmFontOffset.GetEnumerator()) {
+            $lf = New-Object byte[] $LF_SIZE
+            [Array]::Copy($buf, $e.Value, $lf, 0, $LF_SIZE)
+            $out[$e.Key] = $lf
+        }
+    } finally { [System.Runtime.InteropServices.Marshal]::FreeHGlobal($p) }
+    return $out
+}
+
+# 给定的这组 LOGFONT 是不是都已经是这次的目标值（字号按给定 DPI 算）。
+# 比的就是 Set-LogFontFields 会写的那几个字段。
+function Test-MetricsMatch($LogFonts, [int]$Dpi) {
+    $h = Get-MetricsHeight $MetricsSize $Dpi
+    foreach ($b in $LogFonts.Values) {
+        $f = Get-LogFontInfo $b
+        if (-not $f) { return $false }
+        # -ne 比字符串不分大小写，和 GDI 认族名的规矩一致
+        if ($f.Face -ne $MetricsFace -or $f.Height -ne $h -or $f.Weight -ne $MetricsWeight -or
+            $f.CharSet -ne $MetricsCharSet -or $f.Quality -ne $MetricsQuality) { return $false }
+    }
+    return $true
+}
+
+# 会话里那 6 个是不是已经是目标值。登录脚本靠它判断 Windows 有没有把我们写的值重置
+# 掉：没被重置就什么都不做，免得每次登录都广播一遍 WM_SETTINGCHANGE。
+# 会话才是屏幕上真正在用的那一份，所以它说了算 —— 代价是要调 SPI，也就要先编
+# P/Invoke（Initialize-SpiType）。快的那条路见下面 Test-MetricsInRegistry。
+function Test-MetricsInSession {
+    return (Test-MetricsMatch (Read-SessionLogFonts) (Get-SystemDpi))
+}
+
+# 同样的判断，但只读 HKCU，不碰 SPI —— 也就不用现编程序集（理由见 Initialize-SpiType）。
+# 登录脚本拿它当快速路径：绝大多数登录压根没发生过重置，读完注册表就能收工。
+#
+# 它只负责【提前收工】：返回 $true 才跳过，别的情况一律往下走 Test-MetricsInSession
+# 重新判定，所以拿不准时返回 $false 永远是安全的。
+#   · 字号要按像素比，得知道 DPI。用同一个键里的 AppliedDPI —— 主题引擎自己的记录，
+#     缩放一变，它和这 6 个值是被同一个组件一起改写的。没有或不像话就返回 $false，
+#     不猜。
+#   · 注册表和会话读出来逐字节相同（Win11 26200 实测）。万一不同步，也只会是「注册表
+#     对、会话错」这一种，而会话本来就是登录时从注册表加载的，下次登录自然对上。
+function Test-MetricsInRegistry {
+    $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($MetricsSubKey)
+    if (-not $k) { return $false }
+    try {
+        $dpi = $k.GetValue('AppliedDPI', $null)
+        if ($dpi -isnot [int] -or $dpi -lt 48 -or $dpi -gt 960) { return $false }
+        $vals = [ordered]@{}
+        foreach ($role in $MetricsRoles.Keys) {
+            $b = $k.GetValue($role, $null)
+            if ($b -isnot [byte[]]) { return $false }
+            $vals[$role] = $b
+        }
+    } finally { $k.Dispose() }
+    return (Test-MetricsMatch $vals $dpi)
+}
+
 # --------------------------------------------------------------- 编排
 function Show-WindowMetricsPlan {
     $dpi = Get-SystemDpi
@@ -659,6 +780,7 @@ function Show-WindowMetricsPlan {
         $state = if ($t.Loaded) { '已加载' } else { '未加载，将临时挂载' }
         Write-Host ('    {0,-42} [{1}]' -f $t.Who, $state)
     }
+    Show-AutoRestorePlan
 }
 
 function Invoke-WindowMetricsApply {
@@ -741,6 +863,39 @@ function Invoke-WindowMetricsApply {
     if ($skipped -gt 0) {
         Write-Host ("有 {0} 个配置单元不在现有备份里，被跳过了。先 -revert 再重跑即可覆盖它们。" -f `
                     $skipped) -ForegroundColor DarkYellow
+    }
+
+    # 登录自动恢复。它失败不该拖垮后面的机制 4，刚写好的 6 项也照样有效，报一句就行。
+    if ($ok -gt 0) {
+        if (Test-MetricsAutoRestoreNeeded) {
+            try {
+                $cmd = Install-MetricsAutoRestore
+                $script:AutoRestoreOn = $true
+                Write-Host ('[经典] 已登记登录自动恢复 {0}\{1}' -f $AutoRestoreRunKey, $AutoRestoreName) -ForegroundColor Green
+                Write-Host ('       {0}' -f $cmd) -ForegroundColor DarkGray
+            } catch {
+                Write-Host ('[经典] 登录自动恢复没有登记: {0}' -f $_.Exception.Message) -ForegroundColor DarkYellow
+                Write-Host '       以后改了显示缩放，重新登录后把这次的安装命令再跑一遍即可。' -ForegroundColor DarkYellow
+            }
+        } else {
+            # 字号字重都是默认值，缩放重置无害，不装。之前用非默认值装过、这次改回
+            # 默认的话，顺手拆掉：不然旧的 Run 命令行还带着老字号，下次缩放一变又会把
+            # 它写回来，跟这次的默认值打架。$bk 里没有 AutoRestore 一节（从没装过）时，
+            # Remove-MetricsAutoRestore 直接返回，什么都不做、不报错。
+            #
+            # 这里必须自己接住异常。Remove-MetricsAutoRestore 是按【还原】那条路写的
+            # ——删不掉就抛，好让 -revert 整个停下 —— 但安装这条路上它只是收尾，抛出去
+            # 会被 main.ps1 的 trap 接走直接 break：机制 4 和 Restart-FontCache 全都轮不
+            # 到，用户还会看到「注册表已被部分修改」，而其实这一趟该写的 6 项一个没少。
+            try {
+                Remove-MetricsAutoRestore $bk
+                Write-Host '[经典] 字号字重均为默认值，缩放重置后仍是替换字体，未安装登录自动恢复。' -ForegroundColor DarkGray
+            } catch {
+                Write-Host ('[经典] 旧的登录自动恢复没拆干净: {0}' -f $_.Exception.Message) -ForegroundColor DarkYellow
+                Write-Host ('       它还带着上一次的字号字重，下次改显示缩放会跟本次的默认值打架，手动删掉 {0}\{1} 即可。' -f `
+                            $AutoRestoreRunKey, $AutoRestoreName) -ForegroundColor DarkYellow
+            }
+        }
     }
     return $ok
 }
@@ -832,6 +987,178 @@ function Restore-WindowMetricsSection($saved) {
             Write-Host ('[经典] {0,-42} 注册表已还原' -f $t.Who) -ForegroundColor Green
         } catch {
             Write-Host ('[经典] {0,-42} 还原失败: {1}' -f $t.Who, $_.Exception.Message) -ForegroundColor Red
+        }
+    }
+}
+
+# --------------------------------------------------------------- 登录自动恢复
+# 显示缩放一变，Windows 会在下一次登录时把这 6 个字体整个重置成主题自带的默认值
+# （Win11 中文版是 Microsoft YaHei UI 9pt Regular），不是按比例换算 —— 我们写的
+# 族名、字号、字重一起没了，标题栏高度也回到默认。noMeiryoUI 也一样会丢。
+#
+# 这是 Windows 自己的机制，拦不住。winlogon 登录时调 UXInit.dll 的 ThemesOnLogon
+# 加载主题；DPI 相关的记录（ThemeManager\LastLoadedDPI、WindowMetrics\AppliedDPI）
+# 只有 UXInit.dll / uxtheme.dll 这些主题组件在用，内核里读 WindowMetrics 的
+# win32kbase.sys 连 AppliedDPI 都不认，只会原样加载像素值（Win11 26200 上查过这几个
+# 文件里的字符串）。所以也别想着把注册表锁成只读：挡住了重置，150% 回到 100% 后
+# 10pt（20px）会原样变成 15pt。
+#
+# 能做的是被重置之后写回去：往 HKLM\...\Run 登记 logon_window_metrics.ps1，每个用户
+# 每次登录查一遍，被重置了就按当前 DPI 重写。
+#   · 只在字号或字重非默认时才装（Test-MetricsAutoRestoreNeeded）。这一层挂的就是
+#     Windows 重置回落的那个族（文件开头的 $YaHei），所以默认 9pt Regular 时重置写出来
+#     的和我们装的【一模一样】，没必要每次登录跑脚本、闪窗口。
+#   · 用 Run 不用计划任务：Run 由 Explorer 在桌面起来之后才跑，一定排在主题引擎的
+#     重置后面；计划任务的登录触发器和它谁先谁后没有保证。
+#   · 脚本放 %ProgramFiles%\WinModernSC\：每个账户（包括管理员）登录都会执行它，放在
+#     标准用户写得进去的地方就是现成的提权口子。ProgramFiles 默认就是「管理员 /
+#     SYSTEM 可写、其余只读」，新建的子目录继承这套权限，不用自己铺 DACL
+#     （$TargetDir 那边要自己铺，因为它建在 C:\ 根下，见 main_fonts.ps1）。
+#   · 登录时跑的是 PowerShell，控制台程序，会闪一下窗口。已知，接受。
+# 覆盖不到的：远程桌面断开后重连不算登录，Run 不会再跑；登录前的界面（.DEFAULT）
+# 也没有 Run 可跑。
+# 破例的：它不看备份（读不到），所以安装之后才建的账户、安装时备份失败被跳过的
+# 账户，登录时也会被写成目标值 —— 这两类不在「改过的 ⊆ 备份过的」之内，-revert
+# 手里没有它们的原值。前一类本来就从新用户模板继承了我们的值，要的正是这个效果。
+$AutoRestoreRunKey      = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
+# Explorer 给 HKLM\...\Run 里每一项记的启用 / 禁用状态，在任务管理器「启动应用」里
+# 开关过就会有。Run 值删了它也不会自己消失，还原时一起清。
+$AutoRestoreApprovedKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run'
+$AutoRestoreName        = 'WinModernSC'
+$AutoRestoreDir         = Join-Path $env:ProgramFiles 'WinModernSC'
+# 登录脚本本身，加上它要 dot-source 的本文件
+$AutoRestoreScript      = 'logon_window_metrics.ps1'
+$AutoRestoreFiles       = @($AutoRestoreScript, 'main_window_metrics.ps1')
+# 微软文档：Run 值里的命令行不能超过 260 个字符。
+$AutoRestoreMaxCmd      = 260
+
+# Windows 缩放重置后落到的默认值：主题自带的 Regular + 9pt（族名是 $YaHei，正是这一层
+# 的目标族）。字号字重正好也是我们两个参数的默认值（main.ps1 的 ValidateRange/ValidateSet）。
+$MetricsResetWeight     = 'Regular'
+$MetricsResetSize       = 9
+
+# 要不要装登录自动恢复。只在字号或字重【偏离】重置后的默认值时才装：都是默认值的话，
+# 重置写出来的 $YaHei 9pt Regular 和我们装的逐字节相同，等于没被动过，没必要每次登录
+# 都跑脚本、闪一下窗口。字号是 double，用 double 比，避免 9 和 9.0 被当成不同。
+function Test-MetricsAutoRestoreNeeded {
+    return (([double]$MetricsSize -ne [double]$MetricsResetSize) -or
+            (${window-metrics-weight} -ne $MetricsResetWeight))
+}
+
+# 登录时 Run 执行的那一行。
+#   · 不管 -install 是在 PowerShell 7 还是 5.1 里跑的，登录时一律用系统自带的
+#     Windows PowerShell 5.1：哪台 Windows 都有，路径固定。写全路径，不靠 PATH。
+#   · 字号和字重就是这一趟 -install 的参数，写死在命令行里 —— 登录脚本读不到备份
+#     JSON。字号按固定区域格式写：德语系统上 10.5 会 ToString 成 "10,5"。
+#   · 目标族（main.ps1 的 $SUB）也一起传：登录脚本自己再抄一份的话，$SUB 一改两边就
+#     对不上，而那种不一致没有任何东西会报出来，见登录脚本里 $SUB 那几行。
+function Get-AutoRestoreCommand {
+    $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    return ('"{0}" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "{1}" -Size {2} -Weight {3} -Sub "{4}"' -f `
+            $ps, (Join-Path $AutoRestoreDir $AutoRestoreScript),
+            ([double]$MetricsSize).ToString([System.Globalization.CultureInfo]::InvariantCulture),
+            ${window-metrics-weight}, $SUB)
+}
+
+# 登记登录自动恢复，返回写进 Run 的那一行。和别的机制一样只备份一次、先落盘再
+# 动手：Run 值的原值（原本没有就记 $null，还原时删掉）、目录是不是我们建的、复制
+# 了哪些文件。重跑 -install 换了字号字重，就是把脚本重新复制一遍、把 Run 改写掉。
+function Install-MetricsAutoRestore {
+    $cmd = Get-AutoRestoreCommand
+    if ($cmd.Length -gt $AutoRestoreMaxCmd) {
+        throw ('命令行 {0} 个字符，超过 Run 值 {1} 个字符的上限，Windows 不会执行它' -f `
+               $cmd.Length, $AutoRestoreMaxCmd)
+    }
+
+    $bk = Read-BackupFile
+    if ($null -eq $bk) { $bk = [pscustomobject]@{} }
+    if (-not (Get-MapValue $bk 'AutoRestore')) {
+        Set-MapValue $bk 'AutoRestore' ([ordered]@{
+            RunValue   = (Get-RegValueOrNull $AutoRestoreRunKey $AutoRestoreName)
+            Dir        = $AutoRestoreDir
+            CreatedDir = (-not (Test-Path -LiteralPath $AutoRestoreDir))
+            Files      = @($AutoRestoreFiles | ForEach-Object { Join-Path $AutoRestoreDir $_ })
+        })
+        Write-BackupFile $bk
+    }
+
+    if (-not (Test-Path -LiteralPath $AutoRestoreDir)) {
+        New-Item -ItemType Directory -Path $AutoRestoreDir -Force | Out-Null
+    }
+    foreach ($f in $AutoRestoreFiles) {
+        Copy-Item -LiteralPath (Join-Path $RootDir "src\$f") -Destination (Join-Path $AutoRestoreDir $f) -Force
+    }
+    # 最后才写 Run：文件没复制全就登记，登录时只会跑出一个找不到文件的错。
+    Set-ItemProperty -Path $AutoRestoreRunKey -Name $AutoRestoreName -Value $cmd -Type String
+    $script:WroteSomething = $true
+    return $cmd
+}
+
+function Show-AutoRestorePlan {
+    if (-not (Test-MetricsAutoRestoreNeeded)) {
+        Write-Host '  登录自动恢复：字号 9pt、字重 Regular 都是默认值，缩放重置后仍是替换字体，不安装。' -ForegroundColor DarkGray
+        $cur = Get-RegValueOrNull $AutoRestoreRunKey $AutoRestoreName
+        if ($null -ne $cur) {
+            Write-Host ('    注：之前用非默认值装过，本次会拆掉现有的 {0}\{1}。' -f $AutoRestoreRunKey, $AutoRestoreName) -ForegroundColor DarkGray
+        }
+        return
+    }
+    $cmd = Get-AutoRestoreCommand
+    $cur = Get-RegValueOrNull $AutoRestoreRunKey $AutoRestoreName
+    Write-Host '  登录自动恢复（改了显示缩放，Windows 会把上面 6 项重置回默认，由它写回去）：' -ForegroundColor Yellow
+    Write-Host ('    {0}\{1}' -f $AutoRestoreRunKey, $AutoRestoreName)
+    Write-Host ('      现: {0}' -f $(if ($null -eq $cur) { '(不存在)' } else { $cur })) -ForegroundColor DarkGray
+    Write-Host ('      新: {0}' -f $cmd) -ForegroundColor Gray
+    Write-Host ('    脚本复制到 {0}\ ：{1}' -f $AutoRestoreDir, ($AutoRestoreFiles -join '、'))
+    if ($cmd.Length -gt $AutoRestoreMaxCmd) {
+        Write-Host ('    !! 命令行 {0} 个字符，超过 Run 值 {1} 个字符的上限，实际安装时会跳过这一项。' -f `
+                    $cmd.Length, $AutoRestoreMaxCmd) -ForegroundColor DarkYellow
+    }
+}
+
+# 由 main_revert.ps1 最先调用。必须赶在还原字体之前拆：还原中途出错的话它还在，
+# 下次登录又会把我们的字号写回去。删不掉就直接抛，让整个还原停在原地、备份留着。
+function Remove-MetricsAutoRestore($saved) {
+    $ar = Get-MapValue $saved 'AutoRestore'
+    if (-not $ar) { return }
+
+    $orig = Get-MapValue $ar 'RunValue'
+    if ($null -ne $orig) {
+        Set-ItemProperty -Path $AutoRestoreRunKey -Name $AutoRestoreName -Value $orig
+        Write-Host ('还原 [AutoRestore] {0} = {1}' -f $AutoRestoreName, $orig) -ForegroundColor Green
+    } else {
+        if ($null -ne (Get-RegValueOrNull $AutoRestoreRunKey $AutoRestoreName)) {
+            Remove-ItemProperty -Path $AutoRestoreRunKey -Name $AutoRestoreName
+        }
+        if ($null -ne (Get-RegValueOrNull $AutoRestoreApprovedKey $AutoRestoreName)) {
+            Remove-ItemProperty -Path $AutoRestoreApprovedKey -Name $AutoRestoreName
+        }
+        Write-Host ('删除 [AutoRestore] {0}' -f $AutoRestoreName) -ForegroundColor Green
+    }
+
+    foreach ($f in @(Get-MapValue $ar 'Files' | Where-Object { $_ })) {
+        switch (Remove-InstalledFile ([string]$f)) {
+            'deleted'  { Write-Host ("已删除   $f") -ForegroundColor Green }
+            'onreboot' { Write-Host ("重启后删除 $f（当前被占用）") -ForegroundColor DarkYellow }
+            'missing'  { }
+            default    { Write-Host ("删除失败 $f") -ForegroundColor Red }
+        }
+    }
+
+    # 目录只在是我们建的时候才删。还剩东西的话（登记了重启后删的文件，或者别人放进来
+    # 的），也登记重启后删 —— 到时候不空，Windows 自己会放弃，不会误删。
+    $dir = [string](Get-MapValue $ar 'Dir')
+    if ($dir -and (Get-MapValue $ar 'CreatedDir') -and (Test-Path -LiteralPath $dir) -and (Test-SafeToRemove $dir)) {
+        $left = @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue)
+        $gone = $false
+        if ($left.Count -eq 0) {
+            try { Remove-Item -LiteralPath $dir -Force -ErrorAction Stop; $gone = $true } catch { }
+        }
+        if ($gone) {
+            Write-Host "已删除目录 $dir" -ForegroundColor Green
+        } else {
+            [void][FontDeploy.Native]::DeleteOnReboot($dir)
+            Write-Host "目录 $dir 将在重启后删除" -ForegroundColor DarkYellow
         }
     }
 }

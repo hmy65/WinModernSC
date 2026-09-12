@@ -100,6 +100,11 @@ function Show-FontsPlan {
             Write-Host ('     先运行  {0}   （缺 {1} 个）' -f $m.Name, $m.Count) -ForegroundColor DarkYellow
         }
     }
+    $exists = Test-Path -LiteralPath $TargetDir
+    Write-Host ("  目录 {0}{1}：{2}" -f $TargetDir,
+                $(if ($exists) { '（已存在）' } else { '（将新建）' }),
+                $(if ($exists) { '本脚本建的会锁成管理员可写、其余只读；别人预先建的保留原权限' }
+                  else { '会锁成管理员 / SYSTEM 可写、其余只读（对齐 C:\Windows\Fonts）' })) -ForegroundColor DarkGray
 }
 
 function Invoke-FontsApply {
@@ -147,36 +152,64 @@ function Invoke-FontsApply {
     $prevInst = Get-MapValue $bk 'Install'
     if ($prevInst -and (Get-MapValue $prevInst 'CreatedDir')) { $createdDir = $true }
 
-    # 授权对象和 C:\Windows\Fonts 保持一致（icacls 实测结果）：
-    #   BUILTIN\Users                       S-1-5-32-545
-    #   ALL APPLICATION PACKAGES            S-1-15-2-1
-    #   ALL RESTRICTED APPLICATION PACKAGES S-1-15-2-2
-    # 后两个不能省：AppContainer 进程（MSIX/UWP/WinUI3）鉴权分两段，除了常规
-    # 组 SID 那一遍，DACL 里还得单独命中包 SID 或这两个通配 SID 才放行。而
-    # C:\ 根目录没有可继承的 AppContainer ACE，新建的 C:\Fonts 一条都拿不到，
-    # 访问面比它要顶替的系统字体目录还窄。目录里只有系统界面字体，本来就该
-    # 全机器可读，放开不泄漏任何东西。
-    $grantees = [ordered]@{
-        'S-1-5-32-545' = 'BUILTIN\Users'
-        'S-1-15-2-1'   = 'ALL APPLICATION PACKAGES'
-        'S-1-15-2-2'   = 'ALL RESTRICTED APPLICATION PACKAGES'
-    }
-    try {
-        # -ErrorAction Stop：这两个也发非终止错误，不写的话 catch 抓不住，
-        # 会绕过下面那句「设置 ACL 失败（通常仍可用）」直接把红字甩给用户。
-        $acl = Get-Acl -LiteralPath $TargetDir -ErrorAction Stop
-        foreach ($sidStr in $grantees.Keys) {
-            # SID 串合法就能构造，不要求当前系统能翻译成账户名，所以
-            # S-1-15-2-* 在没有 AppContainer 的老系统上也不会抛。
-            $sid = New-Object System.Security.Principal.SecurityIdentifier $sidStr
-            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-                $sid, 'ReadAndExecute', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
-            $acl.AddAccessRule($rule)
+    # C:\Fonts 会被 Fonts 注册项指向，【每个用户、包括管理员和登录界面】都会加载
+    # 里面的文件。所以它必须像 C:\Windows\Fonts 那样：管理员 / SYSTEM 可写，其他人
+    # 只读。默认继承来的权限【不能】直接用 —— 新建在 C:\ 根下的目录会继承根目录的
+    # "Authenticated Users:(M)"（改写权），于是任何标准用户都能替换全机所有账户在用
+    # 的界面字体，还能拿这些被高权限进程解析的字体文件当本地提权面。所以断掉继承，
+    # 重铺一套显式 DACL。
+    #
+    # 授权对象和 C:\Windows\Fonts 对齐（icacls 实测）：
+    #   NT AUTHORITY\SYSTEM                  S-1-5-18     完全控制
+    #   BUILTIN\Administrators               S-1-5-32-544 完全控制
+    #   BUILTIN\Users                        S-1-5-32-545 只读 + 执行
+    #   ALL APPLICATION PACKAGES             S-1-15-2-1   只读 + 执行
+    #   ALL RESTRICTED APPLICATION PACKAGES  S-1-15-2-2   只读 + 执行
+    # 后两个不能省：AppContainer 进程（MSIX/UWP/WinUI3）鉴权分两段，除了常规组 SID
+    # 那一遍，DACL 里还得单独命中包 SID 或这两个通配 SID 才放行。全用众所周知 SID，
+    # 不靠本地化账户名。五条都带 ContainerInherit,ObjectInherit，复制进来的文件跟着
+    # 继承这套受保护 DACL。
+    #
+    # 只在【我们自己建的】目录上重铺权限（$createdDir，含之前某趟建的）。C:\Fonts
+    # 若是别人预先建好的，不知道人家拿它做什么，不擅自改它的 ACL，只提示一句。
+    $grantees = @(
+        @{ Sid = 'S-1-5-18';     Rights = 'FullControl'    }
+        @{ Sid = 'S-1-5-32-544'; Rights = 'FullControl'    }
+        @{ Sid = 'S-1-5-32-545'; Rights = 'ReadAndExecute' }
+        @{ Sid = 'S-1-15-2-1';   Rights = 'ReadAndExecute' }
+        @{ Sid = 'S-1-15-2-2';   Rights = 'ReadAndExecute' }
+    )
+    if ($createdDir) {
+        try {
+            # -ErrorAction Stop：Get-Acl / Set-Acl 也发非终止错误，不写的话 catch
+            # 抓不住，会绕过下面那句「锁定权限失败」直接把红字甩给用户。
+            $acl = Get-Acl -LiteralPath $TargetDir -ErrorAction Stop
+            # 断继承，且【不】把继承来的 ACE 复制成显式（第二个参数 false）：C:\ 那条
+            # Authenticated Users 改写权就此不在这个目录上生效。
+            $acl.SetAccessRuleProtection($true, $false)
+            # 断继承后可能还留着历史【显式】ACE（重装、或别的工具加过的），先清干净
+            # 再铺，保证最终就是上面那五条，不多不少。继承来的这时已经不在集合里，
+            # 只删非继承的。
+            foreach ($r in @($acl.Access | Where-Object { -not $_.IsInherited })) {
+                [void]$acl.RemoveAccessRule($r)
+            }
+            foreach ($g in $grantees) {
+                # SID 串合法就能构造，不要求当前系统能翻译成账户名，所以
+                # S-1-15-2-* 在没有 AppContainer 的老系统上也不会抛。
+                $sid = New-Object System.Security.Principal.SecurityIdentifier $g.Sid
+                $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+                    $sid, $g.Rights, 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+            }
+            Set-Acl -LiteralPath $TargetDir -AclObject $acl -ErrorAction Stop
+            Write-Host "$TargetDir 权限已锁定：管理员 / SYSTEM 可写，其余只读（含 UWP 沙箱），标准用户不能改。" -ForegroundColor Green
+        } catch {
+            Write-Host "锁定 $TargetDir 权限失败: $($_.Exception.Message)" -ForegroundColor DarkYellow
+            Write-Host "  标准用户可能仍能写入，建议手动比对  icacls C:\Windows\Fonts  收紧。" -ForegroundColor DarkYellow
         }
-        Set-Acl -LiteralPath $TargetDir -AclObject $acl -ErrorAction Stop
-        Write-Host "已授予 BUILTIN\Users + 应用包 SID 对 $TargetDir 的读取权限（所有用户 / UWP 沙箱可用）" -ForegroundColor Green
-    } catch {
-        Write-Host "设置 ACL 失败（通常仍可用）: $($_.Exception.Message)" -ForegroundColor DarkYellow
+    } else {
+        Write-Host "$TargetDir 非本脚本创建，保留其现有权限不动。" -ForegroundColor DarkGray
+        Write-Host "  提示：若它继承了 C:\ 的 'Authenticated Users:(M)'，标准用户能替换字体文件；" -ForegroundColor DarkYellow
+        Write-Host "        可手动比对  icacls C:\Windows\Fonts  自行收紧。" -ForegroundColor DarkYellow
     }
 
     $installedFiles = @()

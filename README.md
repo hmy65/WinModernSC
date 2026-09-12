@@ -38,7 +38,7 @@ mechanism under `src\`.
 | --- | --- | --- |
 | **1** | Repoints the `Fonts` registry key at the 22 generated files (12 static `Segoe UI`, 1 `Segoe UI Variable`, 9 Chinese families); GDI and DirectWrite both read the family name out of the font file itself, so the shell, UWP/WinUI, browsers and Office all follow. | [`src/main_fonts.ps1`](src/main_fonts.ps1) |
 | **2** | Writes `FontSubstitutes` entries pointing the old family names `Tahoma`, `MS Shell Dlg` and `MS Sans Serif` at `Segoe UI`, to catch legacy Win32 programs still asking for them. | [`src/main_font_substitutes.ps1`](src/main_font_substitutes.ps1) |
-| **3** | Writes the six `WindowMetrics` LOGFONTs (caption, small caption, menu, dialog, status bar, icon label) plus caption height and border width — this is the only layer that can change the point size. Size and weight are set with the two `-window-metrics-*` options. | [`src/main_window_metrics.ps1`](src/main_window_metrics.ps1) |
+| **3** | Writes the six `WindowMetrics` LOGFONTs (caption, small caption, menu, dialog, status bar, icon label) plus caption height and border width — this is the only layer that can change the point size. Size and weight are set with the two `-window-metrics-*` options, and a sign-in check writes them back whenever Windows resets them. | [`src/main_window_metrics.ps1`](src/main_window_metrics.ps1), [`src/logon_window_metrics.ps1`](src/logon_window_metrics.ps1) |
 | **4** | Prepends two lines to `FontLink\SystemLink` for every `Segoe UI` family, so GDI's Han fallback resolves through the files mechanism 1 installed instead of the stock font in `%windir%\Fonts`. Each family gets the matching weight, and the rest of the existing chain is kept as-is. | [`src/main_font_link.ps1`](src/main_font_link.ps1) |
 
 Undoing all four is handled by [`src/main_revert.ps1`](src/main_revert.ps1), driven from the
@@ -49,10 +49,11 @@ backup JSON that each mechanism writes before it changes anything.
 **Mechanism 1 is the foundation; 2, 3 and 4 all assume it is in place.** None of them fails
 without it — each writes what it writes regardless — but the *result* changes:
 
-- **2 and 3** only redirect font requests to the family name `Segoe UI`. Whether that name
-  resolves to your font or to Microsoft's original depends entirely on mechanism 1 having
-  run, in this run or an earlier one. `main.ps1` prints a warning if you combine `-no-fonts`
-  with either of them.
+- **2 and 3** only redirect font requests to a family name — 2 to `Segoe UI`, 3 to
+  `Microsoft YaHei UI` (the family Windows gives the classic UI, at the matching weight for
+  a non-Regular one). Whether that name resolves to your font or to Microsoft's original
+  depends entirely on mechanism 1 having run, in this run or an earlier one. `main.ps1`
+  prints a warning if you combine `-no-fonts` with either of them.
 - **4 depends on 1 twice over.** It reads the `Fonts` entry for the *matching weight* of
   Microsoft YaHei to build the first line of the fallback chain, so it has to run *after*
   mechanism 1 — `main.ps1` enforces that order. And the problem it exists to solve (Han
@@ -108,18 +109,26 @@ Each hive's `AppliedDPI` goes into the backup, and `lfHeight` is rescaled on res
 display scaling changed in the meantime. noMeiryoUI covers this layer only — not the ones
 browsers, UWP apps and Office read.
 
-**7. Full backup, one-command restore, and a dry run.** Every value about to be written is
+**7. A non-default size or weight survives a display-scaling change.** Changing the scaling
+makes Windows reset the classic UI fonts at the next sign-in; noMeiryoUI loses its settings
+the same way. Mechanism 3 writes the very family Windows falls back to (`Microsoft YaHei UI`),
+so with the defaults (9pt Regular) the reset writes exactly what was installed and nothing is
+needed. Only when you pick a non-default `-window-metrics-*` does mechanism 3
+register a short sign-in script ([`src/logon_window_metrics.ps1`](src/logon_window_metrics.ps1))
+that rewrites your size and weight at the new scaling; `-revert` removes it.
+
+**8. Full backup, one-command restore, and a dry run.** Every value about to be written is
 saved to `winmodernsc-backup.json` first; values that did not exist beforehand are recorded
 as null and deleted on restore. Registry keys the install created are removed if they end up
 empty, so `-revert` leaves no residue. `-DryRun` prints the complete plan for all four
 mechanisms and writes nothing at all.
 
-**8. No process injection, no system files replaced.** Font files are copied to `C:\Fonts`
+**9. No process injection, no system files replaced.** Font files are copied to `C:\Fonts`
 and the registry is pointed at them; nothing under `%windir%\Fonts` is modified or deleted.
-Nothing runs after installation — MacType, by comparison, injects into processes to change
-rasterization at run time.
+Apart from the brief sign-in check in highlight 7, nothing runs after installation — MacType,
+by comparison, injects into processes to change rasterization at run time.
 
-**9. Not tied to one source font.** [`src/util.py`](src/util.py) scans `source\` and
+**10. Not tied to one source font.** [`src/util.py`](src/util.py) scans `source\` and
 classifies it as `STATIC`, `VF` or `BOTH`; all three generators branch on that. The static
 path requires only Regular / Light plus either Bold or Black, and uses any extra weights it
 finds; on the variable path the weight each output is cut at is read straight off the Windows
@@ -248,6 +257,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\main.ps1 -install
 Then **sign out and back in**, or reboot. GDI caches `FontSubstitutes` when a session
 starts, so restarting the font cache service is not enough.
 
+If you chose a non-default size or weight, a console window may flash briefly at each sign-in
+from then on. That is the sign-in check from highlight 7, and it is normal.
+
 Restore everything, including deleting the installed font files:
 
 ```bash
@@ -260,9 +272,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\main.ps1 -revert
 | --- | --- |
 | `-install` | Install everything (mechanisms 1 through 4). |
 | `-revert` | Restore everything from `winmodernsc-backup.json` and delete the installed font files. |
-| `-no-fonts` | Skip mechanism 1. **Nothing actually gets replaced** — 2 and 3 still redirect requests to `Segoe UI`, but that stays Microsoft's original font — so this is only useful when an earlier run already installed the files and you just want the registry rewritten. |
+| `-no-fonts` | Skip mechanism 1. **Nothing actually gets replaced** — 2 and 3 still redirect requests to `Segoe UI` and `Microsoft YaHei UI`, but those stay Microsoft's original fonts — so this is only useful when an earlier run already installed the files and you just want the registry rewritten. |
 | `-no-font-substitutes` | Skip mechanism 2. Legacy Win32 programs asking for `Tahoma` / `MS Shell Dlg` / `MS Sans Serif` keep their old font; nothing else is affected. |
-| `-no-window-metrics` | Skip mechanism 3. Title bars, menus, dialogs and status bars keep their current font **and size**, because those controls never read the `Fonts` key that mechanism 1 changes. |
+| `-no-window-metrics` | Skip mechanism 3, including its sign-in check. Title bars, menus, dialogs and status bars keep their current font **and size**, because those controls never read the `Fonts` key that mechanism 1 changes. |
 | `-no-font-link` | Skip mechanism 4. If mechanism 1 did run, GDI programs fall back to the stock Microsoft YaHei for Han while DirectWrite uses the new font, so two different Han fonts end up on screen at once (harmless if you also passed `-no-fonts`). |
 | `-window-metrics-size` | Point size for the classic UI (mechanism 3). Default 9. |
 | `-window-metrics-weight` | Weight for the classic UI: `Light` / `Semilight` / `Regular` / `Semibold` / `Bold` / `Black`. Default `Regular`. |
@@ -279,7 +291,7 @@ Running `main.ps1` with no arguments prints this list.
 | --- | --- |
 | 1 | `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts` (22 values), font files in `C:\Fonts` |
 | 2 | `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes` (8 values) |
-| 3 | `<each user>\Control Panel\Desktop\WindowMetrics` (6 LOGFONTs + 2 scalars) |
+| 3 | `<each user>\Control Panel\Desktop\WindowMetrics` (6 LOGFONTs + 2 scalars); with a non-default size or weight, the sign-in check also adds the `WinModernSC` value under `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run` and 2 scripts in `C:\Program Files\WinModernSC` |
 | 4 | `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink` (up to 20 values) |
 
 Left alone on purpose: NSimSun (monospace, used by old programs for table alignment),

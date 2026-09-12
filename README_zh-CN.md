@@ -32,7 +32,7 @@ TTF 发布包，不要 `-Unhinted` 那版。这一套是本项目实测验证过
 | --- | --- | --- |
 | **1** | 把 `Fonts` 注册表键指向生成出来的那 22 个文件（12 个静态 `Segoe UI`、1 个 `Segoe UI Variable`、9 个中文族），GDI 和 DirectWrite 都是从字体文件里读族名的，所以外壳、UWP/WinUI、浏览器、Office 全跟着变。 | [`src/main_fonts.ps1`](src/main_fonts.ps1) |
 | **2** | 写 `FontSubstitutes`，把 `Tahoma`、`MS Shell Dlg`、`MS Sans Serif` 这些老族名指向 `Segoe UI`，兜底那些还在请求它们的老式 Win32 程序。 | [`src/main_font_substitutes.ps1`](src/main_font_substitutes.ps1) |
-| **3** | 写 `WindowMetrics` 里那 6 个 LOGFONT（标题栏、调色板标题、菜单、对话框、状态栏、图标文字），外加标题栏高度和窗口边框 —— 这是唯一能改字号的一层。字号和字重用两个 `-window-metrics-*` 参数调。 | [`src/main_window_metrics.ps1`](src/main_window_metrics.ps1) |
+| **3** | 写 `WindowMetrics` 里那 6 个 LOGFONT（标题栏、调色板标题、菜单、对话框、状态栏、图标文字），外加标题栏高度和窗口边框 —— 这是唯一能改字号的一层。字号和字重用两个 `-window-metrics-*` 参数调，被 Windows 重置了会在登录时自动写回。 | [`src/main_window_metrics.ps1`](src/main_window_metrics.ps1)、[`src/logon_window_metrics.ps1`](src/logon_window_metrics.ps1) |
 | **4** | 往每个 `Segoe UI` 族的 `FontLink\SystemLink` 最前面插两条，让 GDI 的中文回退走机制 1 装的那批文件，而不是 `%windir%\Fonts` 里的原版。按字重挂对应那一档，原来的链原样接在后面。 | [`src/main_font_link.ps1`](src/main_font_link.ps1) |
 
 四套的还原统一由 [`src/main_revert.ps1`](src/main_revert.ps1) 负责，依据是各机制动手之前
@@ -43,9 +43,10 @@ TTF 发布包，不要 `-Unhinted` 那版。这一套是本项目实测验证过
 **机制 1 是地基，2、3、4 都建立在它之上。** 但缺了它没有任何一套会报错 —— 该写什么照写
 不误 —— 变的是*结果*：
 
-- **2 和 3** 只是把字体请求引向 `Segoe UI` 这个族名。这个族名到底解析成你的字体还是微软
-  原版，完全取决于机制 1 有没有装过（这次装或者之前装过都算）。`-no-fonts` 和这两个之一
-  一起用时，`main.ps1` 会打一条警告。
+- **2 和 3** 只是把字体请求引向一个族名 —— 2 引向 `Segoe UI`，3 引向 `Microsoft YaHei UI`
+  （Windows 给经典界面的默认族，字重非 Regular 时挂对应那一档）。族名到底解析成你的字体
+  还是微软原版，完全取决于机制 1 有没有装过（这次装或者之前装过都算）。`-no-fonts` 和这
+  两个之一一起用时，`main.ps1` 会打一条警告。
 - **4 对 1 的依赖有两层。** 它要读 `Fonts` 键里【对应字重那一档】微软雅黑当前指向的文件
   来拼回退链的第一行，所以必须排在机制 1 【之后】执行 —— `main.ps1` 保证了这个顺序。
   而且它要解决的问题（`Segoe UI` 那批文件的汉字被裁掉了）本来就是机制 1 造成的；没有 1，
@@ -89,16 +90,23 @@ TTF 发布包，不要 `-Unhinted` 那版。这一套是本项目实测验证过
 所以新建的账户和登录前的界面一样管。备份里记着当时的 `AppliedDPI`，还原时显示缩放变过就
 按比例把 `lfHeight` 换算回去。noMeiryoUI 只做这一层，够不着浏览器、UWP 和 Office。
 
-**7. 全量备份、一键回退、DryRun 预演。** 每一个将要被写的值，动手之前都先存进
+**7. 改了显示缩放，非默认的字号字重也不会丢。** 显示缩放一变，Windows 会在下次登录时把
+经典界面的字体重置回默认，noMeiryoUI 的设置也是这样丢的。机制 3 挂的正是 Windows 退回的
+那个族（`Microsoft YaHei UI`），所以默认值（9pt Regular）下重置写出来的和装上去的一模一样，
+什么都不用装。只有你选了非默认的 `-window-metrics-*`，机制 3 才登记一个登录脚本
+（[`src/logon_window_metrics.ps1`](src/logon_window_metrics.ps1)），按新缩放把字号字重写
+回去；`-revert` 会连它一起删掉。
+
+**8. 全量备份、一键回退、DryRun 预演。** 每一个将要被写的值，动手之前都先存进
 `winmodernsc-backup.json`，原本不存在的记成 null，还原时删掉。安装那趟建出来的注册表键
 如果最后空了也会删，所以 `-revert` 不留残渣。`-DryRun` 把四套机制要做的改动完整打印出来，
 一个字节都不写。
 
-**8. 不注入进程，不替换系统文件。** 字体文件复制到 `C:\Fonts`，注册表指过去就完事，
-`%windir%\Fonts` 底下一个文件都不动、不删。装完之后没有任何东西在后台跑 —— 作为对比，
-MacType 是注入进程、在运行时改渲染。
+**9. 不注入进程，不替换系统文件。** 字体文件复制到 `C:\Fonts`，注册表指过去就完事，
+`%windir%\Fonts` 底下一个文件都不动、不删。装完之后，除了亮点 7 登录时那一下检查，没有
+任何东西在后台跑 —— 作为对比，MacType 是注入进程、在运行时改渲染。
 
-**9. 不锁定输入字体。** [`src/util.py`](src/util.py) 扫 `source\`，判定出源类型
+**10. 不锁定输入字体。** [`src/util.py`](src/util.py) 扫 `source\`，判定出源类型
 （`STATIC` / `VF` / `BOTH`）之后三个生成脚本各自分支。静态那条路只要求 Regular / Light
 外加 Bold 或 Black 之一，多出来的字重有就用；可变那条路每个输出该切哪一档，直接读它冒充的
 那个 Windows 字体的 `usWeightClass`。斜体不是必需的，缺了就拿对应的正体剪切出来。
@@ -208,6 +216,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\main.ps1 -install
 然后**注销后重新登录**，或者重启。`FontSubstitutes` 是 GDI 在会话启动时缓存的，光重启
 字体缓存服务不够。
 
+如果你选了非默认的字号或字重，之后每次登录时可能会有个命令行窗口一闪而过，那是亮点 7 的
+登录检查，属正常现象。
+
 全部还原，连装进去的字体文件一起删掉：
 
 ```bash
@@ -220,9 +231,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\main.ps1 -revert
 | --- | --- |
 | `-install` | 一键全装（机制 1 到 4）。 |
 | `-revert` | 按 `winmodernsc-backup.json` 全部还原，并删掉装进去的字体文件。 |
-| `-no-fonts` | 跳过机制 1。**等于什么都没换** —— 2 和 3 照样把请求引向 `Segoe UI`，但那还是微软原版 —— 所以只有在之前已经装过一次、这次只想重打注册表时才用得上。 |
+| `-no-fonts` | 跳过机制 1。**等于什么都没换** —— 2 和 3 照样把请求引向 `Segoe UI` 和 `Microsoft YaHei UI`，但那还是微软原版 —— 所以只有在之前已经装过一次、这次只想重打注册表时才用得上。 |
 | `-no-font-substitutes` | 跳过机制 2。请求 `Tahoma` / `MS Shell Dlg` / `MS Sans Serif` 的老式 Win32 程序保持原来的字体，其它几层不受影响。 |
-| `-no-window-metrics` | 跳过机制 3。标题栏、菜单、对话框、状态栏的字体**和字号**都不变，因为这些控件根本不读机制 1 改的 `Fonts` 键。 |
+| `-no-window-metrics` | 跳过机制 3，连同它的登录检查。标题栏、菜单、对话框、状态栏的字体**和字号**都不变，因为这些控件根本不读机制 1 改的 `Fonts` 键。 |
 | `-no-font-link` | 跳过机制 4。如果机制 1 装了，GDI 程序显示中文时会回退到原版微软雅黑，而 DirectWrite 用的是新字体，同一屏上就出现两套中文（要是同时加了 `-no-fonts` 则无所谓）。 |
 | `-window-metrics-size` | 经典界面（机制 3）的字号，单位磅，默认 9。 |
 | `-window-metrics-weight` | 经典界面的字重：`Light` / `Semilight` / `Regular` / `Semibold` / `Bold` / `Black`，默认 `Regular`。 |
@@ -238,7 +249,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\main.ps1 -revert
 | --- | --- |
 | 1 | `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts`（22 个值），字体文件落在 `C:\Fonts` |
 | 2 | `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes`（8 个值） |
-| 3 | `<每个用户>\Control Panel\Desktop\WindowMetrics`（6 个 LOGFONT + 2 个标量） |
+| 3 | `<每个用户>\Control Panel\Desktop\WindowMetrics`（6 个 LOGFONT + 2 个标量）；字号或字重非默认时，登录检查另占 `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run` 下的 `WinModernSC` 一个值，以及 `C:\Program Files\WinModernSC` 里的 2 个脚本 |
 | 4 | `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink`（最多 20 个值） |
 
 特意没动的：新宋体（等宽，老程序拿它对齐表格）、楷体 / 仿宋、

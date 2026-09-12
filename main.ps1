@@ -16,6 +16,12 @@
                               MS Shell Dlg 的旧式 Win32 程序。
       3  WindowMetrics      —— 经典界面(comctl32)那一层的字体和字号。
                               前两套改不了字号，这一套才行。每用户。
+                              挂的是中文族 Microsoft YaHei UI（Windows 自己
+                              给这一层的默认族，机制 1 已指向我们的文件），
+                              不是前两套那个 Segoe UI，理由见该文件开头。
+                              显示缩放一变，Windows 会在下次登录时把它重置
+                              回默认；字号或字重非默认时，还往 HKLM\...\Run
+                              登记一个登录脚本写回去（登录时会闪一下窗口）。
       4  FontLink\SystemLink —— GDI 的中文回退链。Segoe UI 那 12 个静态文件的
                               汉字被裁掉了，GDI 程序显示中文全靠这张表。
                               20 个族：静态那 5 个，加 Segoe UI Variable 被
@@ -71,6 +77,8 @@ $script:WroteSomething = $false
 $script:StoppedServices = @()
 $script:StoppedCache = $false
 $script:UsedAltName = $false
+# 机制 3 的登录自动恢复这一趟有没有登记上，收尾时据此提示
+$script:AutoRestoreOn = $false
 
 # ================================================================ 共享 helper
 # 下面这些函数各个模块都要用，模块文件靠 dot-source 拿到它们。
@@ -401,12 +409,12 @@ Write-Host ('机制 3  经典界面   : {0}' -f $(if ($doMetrics) { "装（{0}pt
 Write-Host ('机制 4  中文回退链 : {0}' -f $(if ($doLink)    { '装' } else { '跳过 (-no-font-link)' })) -ForegroundColor White
 Write-Host ('目标族   : {0}     字体落脚点 : {1}' -f $SUB, $TargetDir) -ForegroundColor White
 
-# 一致性提醒：机制 2/3 都把字体请求引向 "Segoe UI"，而这个族要靠机制 1 装的
-# 12 个文件撑起来。跳过机制 1 的话那一族还是微软原版，观感不会变。
+# 一致性提醒：机制 2 把请求引向 "Segoe UI"、机制 3 引向 "Microsoft YaHei UI"，
+# 而这两族都要靠机制 1 装的文件撑起来。跳过机制 1 的话它们还是微软原版，观感不会变。
 if (-not $doFonts -and ($doSubst -or $doMetrics -or $doLink)) {
     Write-Host ''
-    Write-Host ('!! -no-fonts 跳过了字体文件，但机制 2/3 仍会把请求引向 "{0}"。' -f $SUB) -ForegroundColor DarkYellow
-    Write-Host '   除非之前已经装过一次，否则那一族还是微软原版，观感不会变。' -ForegroundColor DarkYellow
+    Write-Host ('!! -no-fonts 跳过了字体文件，但机制 2 仍会把请求引向 "{0}"、机制 3 引向 "Microsoft YaHei UI"。' -f $SUB) -ForegroundColor DarkYellow
+    Write-Host '   除非之前已经装过一次，否则这两族还是微软原版，观感不会变。' -ForegroundColor DarkYellow
     if ($doLink) {
         Write-Host '   机制 4 则会整个跳过：没有我们的文件可指，插进去等于没插。' -ForegroundColor DarkYellow
         Write-Host '   所以下面「N 条中文回退链」报 0 是正常的，不是出错。' -ForegroundColor DarkYellow
@@ -435,7 +443,7 @@ $metricsCount = 0
 if ($doFonts) { $fontCount = Invoke-FontsApply }
 if ($doSubst) { $substCount = Invoke-SubstitutesApply }
 # 机制 3 和 4 都必须排在机制 1 之后：
-#   3 写进 WindowMetrics 的 "Segoe UI" 要等 Fonts 键指向改造后的文件才算数；
+#   3 写进 WindowMetrics 的 "Microsoft YaHei UI" 要等 Fonts 键指向改造后的文件才算数；
 #   4 的回退链第一行读的正是 Fonts 键里雅黑指向的文件。
 # 这两者之间没有先后要求，按编号来。
 if ($doMetrics) { $metricsCount = Invoke-WindowMetricsApply }
@@ -487,5 +495,8 @@ if ($doFonts) {
 }
 if ($doMetrics) {
     Write-Host '经典界面对当前用户已立即生效（已打开的程序要重启）；其他用户下次登录生效。' -ForegroundColor Cyan
+    if ($script:AutoRestoreOn) {
+        Write-Host '以后每次登录都会检查一遍：改了显示缩放被 Windows 重置的话自动写回。登录时闪一下命令行窗口属正常。' -ForegroundColor Cyan
+    }
 }
 Write-Host '出问题时: 进安全模式运行  .\main.ps1 -revert' -ForegroundColor Cyan

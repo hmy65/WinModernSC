@@ -34,7 +34,10 @@
 #     雅黑 Semibold。Win11 26200 实测（ClearType 渲染比对点阵）：
 #     "Segoe UI Semibold" 的 lfWeight 从 400 写到 700，拉丁都是真 Semibold，
 #     中文却和 "Segoe UI" 400 逐像素相同 —— GDI 不给回退来的中文合成加粗。
-#     照抄的话经典界面选 -window-metrics-weight Semibold 就只加粗了拉丁。
+#     照抄的话，GDI 程序点名要 "Segoe UI Semibold" 时就只加粗了拉丁。
+#     （机制 3 的 -window-metrics-weight Semibold 不在此列：它直接挂
+#     "Microsoft YaHei UI Semibold"，中文不过这条链，见 main_window_metrics.ps1。
+#     这条链仍然要有 —— 程序自己请求 "Segoe UI Semibold" 走的还是它。）
 #   · face 名用 "Microsoft YaHei UI" 系列 —— 全表其它链都这么写，那也正是我们
 #     TTC 里 face1 的 nameID 4。
 #   · Segoe UI Black 系统压根没给链（全表 83 个值名里没有 Black），Windows 自己
