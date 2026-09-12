@@ -146,7 +146,7 @@ matching upright.
 - **Python 3.8+** with fontTools: `pip install fonttools`
 - **PowerShell as Administrator** — Windows PowerShell 5.1 or PowerShell 7 both work.
   `-DryRun` is the only mode that runs without elevation.
-- **About 230 MB free on `C:`** for the generated fonts (the CJK files are the bulk of it).
+- **About 200 MB free on `C:`** for the generated fonts (the CJK files are the bulk of it).
   With a variable source, `SegoeUI-Variable.ttf` carries the whole source font, so add tens
   of MB on top.
 
@@ -303,11 +303,9 @@ reads a BOM-less `.ps1` using the system ANSI code page and will mangle the non-
 ## Credits
 
 - [fonttools](https://github.com/fonttools/fonttools) — library used to manipulate, generate and verify the font files.
-- [noMeiryoUI](https://github.com/Tatsu-syo/noMeiryoUI) — reference for the `WindowMetrics`
-  layer (mechanism 3).
+- [noMeiryoUI](https://github.com/Tatsu-syo/noMeiryoUI) — reference for the `WindowMetrics` layer (mechanism 3).
 - [Sarasa Gothic](https://github.com/be5invis/Sarasa-Gothic) — the recommended source font.
-- [OpenType specification](https://learn.microsoft.com/typography/opentype/spec/) — the
-  basis for how the font tables are written.
+- [OpenType specification](https://learn.microsoft.com/typography/opentype/spec/) — the basis for how the font tables are written.
 - Claude Code.
 
 The generated fonts keep the source font's own copyright and license `name` records. Glyphs

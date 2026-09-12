@@ -122,7 +122,7 @@ TTF 发布包，不要 `-Unhinted` 那版。这一套是本项目实测验证过
 - **Python 3.8+**，装 fontTools：`pip install fonttools`
 - **管理员权限的 PowerShell** —— Windows PowerShell 5.1 和 PowerShell 7 都行。
   只有 `-DryRun` 不需要提权。
-- **`C:` 盘约 230 MB 空间**放生成的字体（大头是中文那 9 个文件）。源是可变字体时
+- **`C:` 盘约 200 MB 空间**放生成的字体（大头是中文那 9 个文件）。源是可变字体时
   `SegoeUI-Variable.ttf` 会把整个源搬过来，按源字体大小再多几十 MB。
 
 ### 1. 把源字体放进 `source\`
@@ -261,11 +261,9 @@ SimSun-ExtB/ExtG 生僻字扩展、微軟正黑體。
 ## Credits
 
 - [fonttools](https://github.com/fonttools/fonttools) —— 用于处理、生成与校验字体文件的 Python 库。
-- [noMeiryoUI](https://github.com/Tatsu-syo/noMeiryoUI) —— `WindowMetrics` 这一层
-  （机制 3）的参考。
+- [noMeiryoUI](https://github.com/Tatsu-syo/noMeiryoUI) —— `WindowMetrics` 这一层（机制 3）的参考。
 - [Sarasa Gothic](https://github.com/be5invis/Sarasa-Gothic) —— 推荐使用的源字体。
-- [OpenType 规范](https://learn.microsoft.com/typography/opentype/spec/) —— 字体各张表
-  怎么写的依据。
+- [OpenType 规范](https://learn.microsoft.com/typography/opentype/spec/) —— 字体各张表怎么写的依据。
 - Claude Code。
 
 生成出来的字体保留源字体自己的版权和许可 `name` 记录。补进来的字形取自你本机的 Windows
